@@ -1,0 +1,117 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+body {
+  background-color: #f1f5f9;
+  color: #0f172a;
+}
+
+@layer utilities {
+  /* Custom scrollbar for light technical canvas theme */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #e2e8f0;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #94a3b8;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #64748b;
+  }
+}
+
+/* Print configuration for A4 sheets per tab */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 8mm 8mm 8mm;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 9.5pt !important;
+    line-height: 1.3 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Hide interactive non-printable elements */
+  .no-print,
+  nav,
+  button,
+  input[type="file"],
+  .interactive-toolbar,
+  header,
+  footer {
+    display: none !important;
+  }
+
+  /* Force print target section visibility */
+  .print-page-target {
+    display: block !important;
+    width: 100% !important;
+    page-break-after: auto;
+  }
+
+  .print-page-break {
+    page-break-before: always !important;
+  }
+
+  .avoid-break {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Table styling for print */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 8.5pt !important;
+  }
+
+  th, td {
+    border: 1px solid #cbd5e1 !important;
+    padding: 4px 6px !important;
+    color: #0f172a !important;
+  }
+
+  th {
+    background-color: #0f2b48 !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+  }
+
+  .card-print {
+    border: 1px solid #cbd5e1 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    box-shadow: none !important;
+    padding: 10px !important;
+    margin-bottom: 12px !important;
+    border-radius: 6px !important;
+  }
+
+  .pdf-dossier-page {
+    border: none !important;
+    box-shadow: none !important;
+    padding: 6mm !important;
+    margin: 0 !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: auto !important;
+  }
+
+  .pdf-dossier-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+}

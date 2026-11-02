@@ -1,0 +1,6 @@
+{
+  "name": "ElectroPlan AR - Diseño Eléctrico Ley 10281 & AEA 770",
+  "description": "Aplicación profesional de diseño e ingeniería eléctrica para viviendas en Córdoba y Argentina. Visor interactivo de planos con calibración, medición de distancias y superficies, detección por IA, esquema unifilar IEC/IRAM, cómputo de cables y caños, e informe oficial de carga bajo normas AEA 90364-7-770, Ley 10281 ERSeP y EPEC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
