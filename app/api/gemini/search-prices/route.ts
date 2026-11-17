@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
+import { extractJsonFromModelText } from '@/lib/safe-json';
 
 export async function POST(req: NextRequest) {
   try {
@@ -10,7 +11,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            'No se encontró clave GEMINI_API_KEY. Ingresá tu clave en la Pestaña 6 (Licencias y Configuración).',
+            'Requisito de Clave Personal: Debés ingresar tu propia clave API Key personal de Google Gemini en la Pestaña 6 (Licencias y Configuración) para buscar precios web.',
         },
         { status: 400 }
       );
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
 Devolvé únicamente un objeto JSON con el valor numérico exacto aproximado para cada ítem.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-4-hydrogen',
       contents: promptText,
       config: {
         responseMimeType: 'application/json',
@@ -56,8 +57,7 @@ Devolvé únicamente un objeto JSON con el valor numérico exacto aproximado par
       },
     });
 
-    const jsonStr = (response.text || '{}').trim();
-    const data = JSON.parse(jsonStr);
+    const data = extractJsonFromModelText(response.text, {});
 
     return NextResponse.json(data);
   } catch (err: any) {

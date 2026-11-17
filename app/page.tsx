@@ -28,6 +28,7 @@ import {
 import Link from 'next/link';
 
 import { FloorData, TechnicalParams } from '@/lib/types';
+import { safeJsonParse } from '@/lib/safe-json';
 import BlueprintViewer from '@/components/BlueprintViewer';
 import ProjectData from '@/components/ProjectData';
 import UnifilarDiagram from '@/components/UnifilarDiagram';
@@ -35,6 +36,7 @@ import BudgetTab from '@/components/BudgetTab';
 import LoadReport from '@/components/LoadReport';
 import LicenseTab from '@/components/LicenseTab';
 import PrintHeader from '@/components/PrintHeader';
+import AIConsultant from '@/components/AIConsultant';
 
 const DEFAULT_FLOORS: FloorData[] = [
   {
@@ -224,10 +226,12 @@ export default function Home() {
       try {
         const savedFloors = localStorage.getItem('electroplan_floors');
         const savedParams = localStorage.getItem('electroplan_params');
-        if (savedFloors) setFloors(JSON.parse(savedFloors));
-        if (savedParams) setParams(JSON.parse(savedParams));
-      } catch (e) {
-        console.error('Error reading from localStorage:', e);
+        const parsedFloors = safeJsonParse<FloorData[] | null>(savedFloors, null);
+        const parsedParams = safeJsonParse<TechnicalParams | null>(savedParams, null);
+        if (Array.isArray(parsedFloors) && parsedFloors.length > 0) setFloors(parsedFloors);
+        if (parsedParams && typeof parsedParams === 'object') setParams(parsedParams);
+      } catch {
+        // Ignore corrupted localStorage values
       }
       setMounted(true);
     }, 0);
@@ -305,17 +309,8 @@ export default function Home() {
             })}
           </nav>
 
-          {/* Zone 3: Separated Action buttons (Guía de Uso, Normas Contempladas & Nuevo Proyecto) */}
+          {/* Zone 3: Action buttons (Guía de Uso & Normas Contempladas) */}
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => setShowResetModal(true)}
-              title="Borrar datos actuales y comenzar un nuevo proyecto desde cero"
-              className="px-3 py-1.5 bg-red-50 hover:bg-red-100 border border-red-300 text-red-800 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-red-600" />
-              Nuevo Proyecto
-            </button>
-
             <button
               onClick={() => setShowUsageModal(true)}
               className="px-3 py-1.5 bg-white hover:bg-slate-200 border border-[#0f2b48] text-[#0f2b48] text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs"
@@ -576,37 +571,29 @@ export default function Home() {
 
               <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 space-y-1">
                 <strong className="text-emerald-900 text-sm block font-black flex items-center gap-1.5">
-                  <Building2 className="w-4 h-4 text-emerald-700" /> 2. Carga de Datos de Obra, Comitente y Profesional
+                  <Building2 className="w-4 h-4 text-emerald-700" /> 2. Carga de Datos, Parámetros y Equipos Especiales
                 </strong>
                 <p className="text-slate-600">
-                  En la pestaña <strong>2 · Datos y Parámetros</strong> completá la ubicación de la obra (Calle, N° y Ciudad), los datos del Comitente (Nombre y DNI) y los del Instalador Electricista Habilitado (Categoría y Matrícula ERSeP).
+                  En la pestaña <strong>2 · Datos y Parámetros</strong> completá la ubicación de la obra, los datos del Comitente y del Instalador Habilitado ERSeP. Podés adicionar cargas de uso específico con el botón <strong>&quot;+ Adicionar Equipo Especial&quot;</strong> (Cargadores EV, Termotanques 3kW, Bombas, Anafes Eléctricos) indicando potencia, tensión monofásica/trifásica y tablero destino (TP pilar o TS vivienda).
                 </p>
               </div>
 
               <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 space-y-1">
                 <strong className="text-purple-900 text-sm block font-black flex items-center gap-1.5">
-                  <Download className="w-4 h-4 text-purple-700" /> 3. Presupuesto, Exportación JSON e Impresión A4
+                  <Download className="w-4 h-4 text-purple-700" /> 3. Esquema Unifilar, Multifilar y Balance de Fases
                 </strong>
                 <p className="text-slate-600">
-                  Descargá una copia de respaldo en JSON con el botón <strong>&quot;Descargar JSON&quot;</strong> o cargá un proyecto previo con <strong>&quot;Cargar JSON&quot;</strong>. Imprimí cada pestaña de manera individual con escala A4 mediante el botón <strong>&quot;Imprimir Pestaña (A4)&quot;</strong>.
+                  En la pestaña <strong>3 · Cuadro y Unifilar</strong> alterná entre el <strong>Esquema Unifilar General</strong> y el <strong>Diagrama Multifilar con Balance de Fases L1, L2, L3</strong> (para suministros trifásicos 380V), verificando que el desequilibrio de cargas sea menor al 15% según AEA 90364.
                 </p>
               </div>
 
               <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 space-y-1">
                 <strong className="text-amber-900 text-sm block font-black flex items-center gap-1.5">
-                  <KeyRound className="w-4 h-4 text-amber-700" /> 4. Clave API Key de Gemini (Procesamiento IA en Distribución)
+                  <KeyRound className="w-4 h-4 text-amber-700" /> 4. Presupuesto, Clave API Gemini y Exportación JSON
                 </strong>
                 <p className="text-slate-600">
-                  Para que la función de análisis automático de planos con IA funcione al distribuir o alojar esta app fuera del entorno de desarrollo:
+                  Descargá copias de respaldo JSON o importá proyectos previos. Cargá tu API Key de Gemini en la <strong>Pestaña 6 · Licencias</strong> para activar la búsqueda automática de precios web y el análisis de planos con IA.
                 </p>
-                <ul className="list-disc pl-5 space-y-1 text-slate-700 font-medium">
-                  <li>
-                    <strong>Cómo obtenerla:</strong> Ingresá a Google AI Studio en <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-800 underline font-bold">aistudio.google.com/app/apikey</a> con tu cuenta Google y hacé clic en &quot;Create API Key&quot;.
-                  </li>
-                  <li>
-                    <strong>Dónde cargarla:</strong> Ve a la <strong>Pestaña 6 · Licencias</strong>, en la sección <strong>&quot;Configuración de Clave API Key de Gemini&quot;</strong>, pegá tu clave (ej: <code>AIzaSy...</code>) y presioná <strong>&quot;Guardar API Key&quot;</strong>.
-                  </li>
-                </ul>
               </div>
             </div>
 
@@ -642,20 +629,20 @@ export default function Home() {
             <div className="space-y-3 text-xs text-slate-700 leading-relaxed">
               <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 space-y-1">
                 <strong className="text-amber-900 text-sm block font-black flex items-center gap-1.5">
-                  <Award className="w-4 h-4 text-amber-700" /> 1. Reglamentación AEA 90364-7-770 (Viviendas Unifamiliares)
+                  <Award className="w-4 h-4 text-amber-700" /> 1. AEA 90364-7-770 & AEA 90364-4-43
                 </strong>
                 <ul className="list-disc pl-5 space-y-1 text-slate-700 font-medium">
                   <li>
-                    <strong>Grado de Electrificación:</strong> Mínimo (hasta 60 m²), Medio (61 a 130 m²), Elevado (131 a 200 m²), Superior (más de 200 m²).
+                    <strong>Intensidad Admisible (Tabla 770.12.I):</strong> Cálculo de ampacidad $I_z$ a 40 °C temperatura ambiente para conductores de cobre IRAM NM 247-3 en cañería embutida.
                   </li>
                   <li>
-                    <strong>Límite de Bocas:</strong> Máximo 15 bocas por circuito de IUG y TUG.
+                    <strong>Coordinación de Protección (AEA 4-43):</strong> Condición estricta $I_b \le I_n \le I_z$ donde la térmico-magnética $I_n$ no supera la capacidad nominal $I_z$ del conductor.
                   </li>
                   <li>
-                    <strong>Factores de Simultaneidad (ks):</strong> IUG (0.66), TUG (0.70), AAc y cargas fijas (1.00).
+                    <strong>Dimensionamiento de Tableros (AEA 771):</strong> Capacidad de módulos DIN en gabinetes con 20% de reserva de espacio útil.
                   </li>
                   <li>
-                    <strong>Caída de Tensión:</strong> Máximo 3% en puntos de utilización y 1% en alimentadores.
+                    <strong>Balance de Fases (Suministros Trifásicos):</strong> Reparto simétrico entre L1, L2 y L3 con desequilibrio mácimo admisible $\le 15\%$.
                   </li>
                 </ul>
               </div>
@@ -666,13 +653,13 @@ export default function Home() {
                 </strong>
                 <ul className="list-disc pl-5 space-y-1 text-slate-700 font-medium">
                   <li>
-                    <strong>Certificado de Instalación Eléctrica Apta (CIE):</strong> Obligatoriedad de certificación firmada por Instalador Habilitado en ERSeP (Categorías I, II y III) para solicitar conexión de suministro.
+                    <strong>Certificado de Instalación Eléctrica Apta (CIE):</strong> Emisión de carpeta técnica oficial para solicitar conexión ante EPEC o Cooperativas de Servicios Públicos.
                   </li>
                   <li>
-                    <strong>Sistema Puesta a Tierra PAT:</strong> Jabalina Copperweld IRAM 2309 (≥ 1.5m), conductor principal de 10 mm² entubado y resistencia objetivo R ≤ 10 Ω (máx. 40 Ω).
+                    <strong>Sistema Puesta a Tierra PAT:</strong> Jabalina Copperweld IRAM 2309 (≥ 1.5m), conductor principal de 10 mm² entubado y resistencia de puesta a tierra R_PAT ≤ 10 Ω.
                   </li>
                   <li>
-                    <strong>Protección Diferencial:</strong> Interruptor diferencial IRAM 2301 de 30 mA instantáneo.
+                    <strong>Protección Diferencial:</strong> Interruptor diferencial IRAM 2301 / IEC 61008-1 de 30 mA instantáneo.
                   </li>
                 </ul>
               </div>
@@ -686,10 +673,10 @@ export default function Home() {
                     <strong>Caja de Medidor:</strong> Sintética IP43 / IK10 autoextinguible (Resolución General 11/2018 ERSeP).
                   </li>
                   <li>
-                    <strong>Ubicación del Pilar / Monolito:</strong> Línea Municipal (LM) con interruptor principal a menos de 2 metros del medidor.
+                    <strong>Ubicación del Pilar:</strong> Línea Municipal (LM) con interruptor principal a menos de 2 metros del medidor.
                   </li>
                   <li>
-                    <strong>Alimentador Principal:</strong> Sección mínima 6 mm² Cobre entubado.
+                    <strong>Alimentador Principal:</strong> Sección mínima 6 mm² Cobre entubado (y 10 mm² Cu para térmicas de 32A/40A a 40°C).
                   </li>
                 </ul>
               </div>
@@ -752,6 +739,9 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* AI Technical Consultant Assistant */}
+      <AIConsultant />
     </div>
   );
 }

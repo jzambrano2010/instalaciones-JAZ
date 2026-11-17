@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Info,
 } from 'lucide-react';
+import { safeFetchJson, safeJsonParse } from '@/lib/safe-json';
 
 interface BudgetTabProps {
   params: TechnicalParams;
@@ -27,46 +28,26 @@ export default function BudgetTab({ params, floors, onImportProject }: BudgetTab
   // Custom user overrides for prices and quantities with lazy localStorage initialization
   const [customMaterialPrices, setCustomMaterialPrices] = useState<Record<string, number>>(() => {
     if (typeof window === 'undefined') return {};
-    try {
-      const saved = localStorage.getItem('electroplan_budget_overrides');
-      if (saved) return JSON.parse(saved).customMaterialPrices || {};
-    } catch {
-      // ignore
-    }
-    return {};
+    const saved = localStorage.getItem('electroplan_budget_overrides');
+    return safeJsonParse<any>(saved, {}).customMaterialPrices || {};
   });
 
   const [customMaterialQtys, setCustomMaterialQtys] = useState<Record<string, number>>(() => {
     if (typeof window === 'undefined') return {};
-    try {
-      const saved = localStorage.getItem('electroplan_budget_overrides');
-      if (saved) return JSON.parse(saved).customMaterialQtys || {};
-    } catch {
-      // ignore
-    }
-    return {};
+    const saved = localStorage.getItem('electroplan_budget_overrides');
+    return safeJsonParse<any>(saved, {}).customMaterialQtys || {};
   });
 
   const [customLaborPrices, setCustomLaborPrices] = useState<Record<string, number>>(() => {
     if (typeof window === 'undefined') return {};
-    try {
-      const saved = localStorage.getItem('electroplan_budget_overrides');
-      if (saved) return JSON.parse(saved).customLaborPrices || {};
-    } catch {
-      // ignore
-    }
-    return {};
+    const saved = localStorage.getItem('electroplan_budget_overrides');
+    return safeJsonParse<any>(saved, {}).customLaborPrices || {};
   });
 
   const [customLaborQtys, setCustomLaborQtys] = useState<Record<string, number>>(() => {
     if (typeof window === 'undefined') return {};
-    try {
-      const saved = localStorage.getItem('electroplan_budget_overrides');
-      if (saved) return JSON.parse(saved).customLaborQtys || {};
-    } catch {
-      // ignore
-    }
-    return {};
+    const saved = localStorage.getItem('electroplan_budget_overrides');
+    return safeJsonParse<any>(saved, {}).customLaborQtys || {};
   });
 
   const [isSearchingPrices, setIsSearchingPrices] = useState<boolean>(false);
@@ -152,36 +133,77 @@ export default function BudgetTab({ params, floors, onImportProject }: BudgetTab
 
   // Web Price Search via Gemini API
   const fetchWebPrices = async () => {
+    let customApiKey =
+      typeof window !== 'undefined' ? localStorage.getItem('electroplan_custom_api_key') : null;
+
+    if (!customApiKey) {
+      const userKey = prompt(
+        '🔑 Clave API Key Personal Requerida:\n\n' +
+        'Cada cliente utiliza su propia clave API Key de Google Gemini para realizar búsquedas e Inteligencia Artificial.\n\n' +
+        'Podés obtener tu clave gratuita en: https://aistudio.google.com/app/apikey\n\n' +
+        'Ingresá tu API Key de Gemini a continuación (o configurala en la Pestaña 6):'
+      );
+      if (!userKey || !userKey.trim()) {
+        setStatusMsg({
+          text: 'Búsqueda cancelada. Necesitás ingresar tu propia clave API Key de Gemini para buscar precios web.',
+          type: 'error',
+        });
+        return;
+      }
+      customApiKey = userKey.trim();
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('electroplan_custom_api_key', customApiKey);
+      }
+    }
+
     setIsSearchingPrices(true);
     setStatusMsg(null);
     try {
-      const customApiKey =
-        typeof window !== 'undefined' ? localStorage.getItem('electroplan_custom_api_key') : null;
-      const reqHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (customApiKey) reqHeaders['x-gemini-api-key'] = customApiKey;
+      const reqHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-gemini-api-key': customApiKey,
+      };
 
-      const response = await fetch('/api/gemini/search-prices', {
+      const result = await safeFetchJson('/api/gemini/search-prices', {
         method: 'POST',
         headers: reqHeaders,
       });
-      const data = await response.json();
 
+      if (!result.ok || result.error || !result.data) {
+        throw new Error(result.error || 'No se pudieron obtener precios automáticos.');
+      }
+
+      const data = result.data;
       if (data) {
         const updatedPrices: Record<string, number> = {};
-        if (data.cable15 && baseMaterials[0]) updatedPrices[baseMaterials[0].item] = data.cable15;
-        if (data.cable25 && baseMaterials[1]) updatedPrices[baseMaterials[1].item] = data.cable25;
-        if (data.cable40 && baseMaterials[2]) updatedPrices[baseMaterials[2].item] = data.cable40;
-        if (data.cable60 && baseMaterials[3]) updatedPrices[baseMaterials[3].item] = data.cable60;
-        if (data.jabalina && baseMaterials[11]) updatedPrices[baseMaterials[11].item] = data.jabalina;
-        if (data.diferencial && baseMaterials[15]) updatedPrices[baseMaterials[15].item] = data.diferencial;
-        if (data.cano20 && baseMaterials[4]) updatedPrices[baseMaterials[4].item] = data.cano20;
+        const findMat = (predicate: (item: string) => boolean) =>
+          baseMaterials.find((m) => predicate(m.item));
+
+        const m15 = findMat((s) => s.includes('1.5 mm²'));
+        const m25 = findMat((s) => s.includes('2.5 mm²'));
+        const m40 = findMat((s) => s.includes('4.0 mm²'));
+        const m60 = findMat((s) => s.includes('6.0 mm²'));
+        const mJab = findMat((s) => s.toLowerCase().includes('jabalina'));
+        const mDif = findMat((s) => s.toLowerCase().includes('diferencial'));
+        const mCano20 = findMat((s) => s.includes('Ø 20 mm'));
+
+        if (data.cable15 && m15) updatedPrices[m15.item] = data.cable15 > 5000 ? Math.round(data.cable15 / 100) : data.cable15;
+        if (data.cable25 && m25) updatedPrices[m25.item] = data.cable25 > 5000 ? Math.round(data.cable25 / 100) : data.cable25;
+        if (data.cable40 && m40) updatedPrices[m40.item] = data.cable40 > 5000 ? Math.round(data.cable40 / 100) : data.cable40;
+        if (data.cable60 && m60) updatedPrices[m60.item] = data.cable60 > 5000 ? Math.round(data.cable60 / 100) : data.cable60;
+        if (data.jabalina && mJab) updatedPrices[mJab.item] = data.jabalina;
+        if (data.diferencial && mDif) updatedPrices[mDif.item] = data.diferencial;
+        if (data.cano20 && mCano20) updatedPrices[mCano20.item] = data.cano20;
 
         setCustomMaterialPrices((prev) => ({ ...prev, ...updatedPrices }));
         setStatusMsg({ text: '¡Precios actualizados exitosamente con valores de referencia de Argentina!', type: 'success' });
       }
     } catch (err: any) {
-      console.error('Error fetching web prices:', err);
-      setStatusMsg({ text: 'No se pudieron obtener precios automáticos. Se conservan los valores locales editables.', type: 'error' });
+      console.warn('Error fetching web prices:', err?.message || err);
+      setStatusMsg({
+        text: err?.message || 'No se pudieron obtener precios automáticos. Se conservan los valores locales editables.',
+        type: 'error',
+      });
     } finally {
       setIsSearchingPrices(false);
     }

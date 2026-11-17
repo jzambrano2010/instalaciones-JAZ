@@ -1,6 +1,10 @@
 export interface FloorData {
   id: string;
   name: string;
+  boardCode?: string; // e.g., 'TS1', 'TS2', 'TS3', 'TS4'
+  colorTag?: string; // Color identificador en el plano (ej. 'Rojo', 'Azul', 'Verde', 'Amarillo')
+  feederLengthM?: number; // Distancia desde TCE hasta este Tablero Seccional (m)
+  feederPhases?: 'auto' | '1F' | '3F'; // Alimentación del seccional desde TCE
   techo: number;
   pared: number;
   tomas: number;
@@ -18,6 +22,16 @@ export interface FloorData {
   estimatedConduitMeters?: number;
 }
 
+export interface SpecialEquipment {
+  id: string;
+  name: string;
+  powerW: number;
+  boardTarget: 'TP' | 'TS' | 'TS1' | 'TS2' | 'TS3' | 'TS4' | string; // TCE (TP) o Tablero Seccional específico (TS1..TS4)
+  voltagePhase: 'Monofásico 220V' | 'Trifásico 380V';
+  circuitType?: 'CUE' | 'TUE' | 'ACU' | 'APU';
+  description?: string;
+}
+
 export interface TechnicalParams {
   area: number;
   V: number;
@@ -30,6 +44,7 @@ export interface TechnicalParams {
   pillarLoc: string; // Ubicación del pilar
   distPillar: number; // Distancia pilar a tablero principal (m)
   soilRes: number; // Resistividad suelo (ohm.m)
+  specialEquipments?: SpecialEquipment[];
   // Obra / Propiedad
   streetAndNum: string; // Calle y N°
   city: string; // Localidad / Ciudad
@@ -45,7 +60,7 @@ export interface TechnicalParams {
 
 export interface Circuit {
   id: string;
-  t: 'IUG' | 'TUG' | 'AA' | 'LAV' | 'TUE';
+  t: 'IUG' | 'TUG' | 'AA' | 'LAV' | 'TUE' | 'CUE';
   d: string;
   q: string | number;
   W: number;
@@ -57,11 +72,59 @@ export interface Circuit {
   estimatedWireLengthM: number; // Cable total length (m)
   estimatedConduitLengthM: number; // Caño total length (m)
   deltaV: number; // % Caída de tensión
+  boardTarget?: string;
+  boardCode?: string; // 'TCE', 'TS1', 'TS2', 'TS3', 'TS4', etc.
+  isThreePhase?: boolean;
+  poles?: '2P' | '4P';
 }
 
 export interface FloorCircuits {
   f: FloorData;
+  boardCode: string;
   c: Circuit[];
+}
+
+export interface SectionalInternalPhaseBalance {
+  wattsL1: number;
+  wattsL2: number;
+  wattsL3: number;
+  ampsL1: number;
+  ampsL2: number;
+  ampsL3: number;
+  unbalancePercent: number;
+  isBalanced: boolean;
+  circuitPhases: Record<string, 'L1' | 'L2' | 'L3' | '3F'>;
+}
+
+export interface SectionalBoardAnalysis {
+  boardCode: string;
+  boardName: string;
+  colorTag?: string;
+  floorId: string;
+  circuits: Circuit[];
+  installedWatts: number;
+  simultaneousWatts: number;
+  simultaneityFactor: number;
+  isThreePhase: boolean;
+  voltage: number;
+  designCurrentIb: number;
+  tceBreakerIn: number;
+  cableSectionMm: number;
+  cableCapacityIz: number;
+  peSectionMm: number;
+  conduitMm: number;
+  feederLengthM: number;
+  feederDeltaVPercent: number;
+  maxCircuitDeltaVPercent: number;
+  totalDeltaVPercent: number;
+  rcdAmps: number;
+  rcdPoles: '2P' | '4P';
+  dinModulesRequired: number;
+  recommendedDinBox: number;
+  conductorSpec: string;
+  assignedPhase: 'L1' | 'L2' | 'L3' | '3F (R-S-T)';
+  internalPhaseBalance: SectionalInternalPhaseBalance;
+  isCompliant: boolean;
 }
 
 export interface ComponentMarker {
@@ -71,6 +134,7 @@ export interface ComponentMarker {
   type: 'techo' | 'pared' | 'tomas' | 'aa' | 'lav' | 'tablero' | 'jabalina';
   label: string;
   floorIndex: number;
+  boardCode?: string;
 }
 
 export interface CalibrationData {

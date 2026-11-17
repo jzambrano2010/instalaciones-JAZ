@@ -1,24 +1,86 @@
 'use client';
 
-import React, { useState } from 'react';
-import { ShieldCheck, UserCheck, KeyRound, Sparkles, MessageSquare, CreditCard } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ShieldCheck, UserCheck, KeyRound, Sparkles, CreditCard, Database, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { safeFetchJson } from '@/lib/safe-json';
 
 export default function LicenseTab() {
   const [role, setRole] = useState<'profesional' | 'administrador'>('profesional');
+  const [userIdentifier, setUserIdentifier] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('electroplan_user_identifier') || '';
+    }
+    return '';
+  });
+
   const [licenseActive, setLicenseActive] = useState<boolean>(false);
   const [licenseDaysLeft, setLicenseDaysLeft] = useState<number>(60);
-  const [trialDaysLeft] = useState<number>(30);
+  const [trialDaysLeft, setTrialDaysLeft] = useState<number>(15);
+  const [isExpired, setIsExpired] = useState<boolean>(false);
+  const [dbConfigured, setDbConfigured] = useState<boolean>(false);
+  const [remoteMessage, setRemoteMessage] = useState<string | null>(null);
+  const [isVerifying, setIsVerifying] = useState<boolean>(false);
+
   const [inputCode, setInputCode] = useState<string>('');
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+
+  // Function to verify license/trial status with remote server API
+  const verifyRemoteLicense = React.useCallback(async (codeToActivate?: string) => {
+    setIsVerifying(true);
+    setRemoteMessage(null);
+    try {
+      const result = await safeFetchJson('/api/license/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userIdentifier: userIdentifier || 'instalador_default',
+          licenseCode: codeToActivate || inputCode || undefined,
+          action: codeToActivate ? 'activate' : 'verify',
+        }),
+      });
+
+      const data = result.data;
+      if (result.ok && data?.success) {
+        setLicenseActive(data.licenseActive);
+        setLicenseDaysLeft(data.licenseDaysLeft);
+        setTrialDaysLeft(data.trialDaysLeft);
+        setIsExpired(data.isExpired);
+        setDbConfigured(data.databaseConfigured);
+        setRemoteMessage(data.message);
+      } else if (result.isHtml) {
+        setRemoteMessage('Validación en modo local activa (sin respuesta JSON del proxy remoto).');
+      } else {
+        setRemoteMessage('❌ Error de verificación: ' + (result.error || data?.error || 'No se pudo contactar al servidor.'));
+      }
+    } catch (err: any) {
+      setRemoteMessage('❌ Error al conectar con el servidor remoto: ' + (err?.message || 'Error desconocido'));
+    } finally {
+      setIsVerifying(false);
+    }
+  }, [userIdentifier, inputCode]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      verifyRemoteLicense();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [verifyRemoteLicense]);
+
+  const saveUserIdentifier = () => {
+    const trimmed = userIdentifier.trim();
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('electroplan_user_identifier', trimmed);
+    }
+    verifyRemoteLicense();
+  };
 
   const applyLicense = () => {
     const trimmed = inputCode.trim();
     if (trimmed.startsWith('LIC-PRO-')) {
-      setLicenseActive(true);
-      setLicenseDaysLeft(60);
-      alert('¡Licencia Comercial de 60 Días Activada con Éxito!');
+      verifyRemoteLicense(trimmed);
+      alert('¡Código de Licencia enviado para activación en el servidor remoto!');
     } else {
-      alert('Código de licencia no válido. Verificá el formato enviado por el Administrador.');
+      alert('Código de licencia no válido. Verificá el formato provisto por el Administrador (Ej: LIC-PRO-XXXXXX-2026).');
     }
   };
 
@@ -30,6 +92,7 @@ export default function LicenseTab() {
     setGeneratedCode(code);
   };
 
+  // Gemini API Key state
   const [apiKeyInput, setApiKeyInput] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('electroplan_custom_api_key') || '';
@@ -79,7 +142,7 @@ export default function LicenseTab() {
 
     try {
       const customApiKey = trimmed || (typeof window !== 'undefined' ? localStorage.getItem('electroplan_custom_api_key') : '');
-      const response = await fetch('/api/gemini/verify-key', {
+      const result = await safeFetchJson('/api/gemini/verify-key', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -88,62 +151,126 @@ export default function LicenseTab() {
         body: JSON.stringify({ apiKey: customApiKey }),
       });
 
-      const data = await response.json();
-      if (data.success) {
+      const data = result.data;
+      if (result.ok && data?.success) {
         setKeyMessage('✅ ' + data.message);
       } else {
-        setKeyMessage('❌ Error: ' + (data.error || 'Clave inválida.'));
+        setKeyMessage('❌ Error: ' + (result.error || data?.error || 'Clave inválida.'));
       }
     } catch (err: any) {
-      setKeyMessage('❌ Error al conectar con el servidor: ' + err.message);
+      setKeyMessage('❌ Error al conectar con el servidor: ' + (err?.message || 'Error de conexión'));
     } finally {
       setIsTestingKey(false);
     }
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-slate-900">
       {/* License Status Overview Card */}
-      <div className="bg-white border border-slate-300 rounded-xl p-5 shadow-sm">
+      <div className="bg-white border border-slate-300 rounded-xl p-5 shadow-sm space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <span className="px-3 py-1 bg-purple-100 text-purple-900 border border-purple-300 rounded-md text-xs font-semibold uppercase tracking-wider">
-              Estado de la Suscripción
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="px-3 py-1 bg-purple-100 text-purple-900 border border-purple-300 rounded-md text-xs font-semibold uppercase tracking-wider">
+                Estado de la Suscripción
+              </span>
+              <span className={`px-2.5 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 ${
+                dbConfigured ? 'bg-emerald-100 text-emerald-900 border-emerald-300' : 'bg-blue-100 text-blue-900 border-blue-300'
+              }`}>
+                <Database className="w-3 h-3" />
+                {dbConfigured ? 'Validación Remota en BD Supabase Activa' : 'Validación Remota Servidor Activa'}
+              </span>
+            </div>
             <h2 className="text-xl font-bold text-[#0f2b48] mt-2 flex items-center gap-2">
               <ShieldCheck className="w-5 h-5 text-purple-800" />
-              {licenseActive ? 'Licencia Comercial Habilitada' : 'Período de Evaluación Gratuito'}
+              {licenseActive
+                ? 'Licencia Comercial Habilitada (60 Días)'
+                : isExpired
+                ? 'Período Gratuito Expirado'
+                : 'Período de Evaluación Gratuito (15 Días)'}
             </h2>
             <p className="text-xs text-slate-600 mt-1">
-              Plataforma habilitada para emisión de documentación técnica y carpetas ERSeP / Ley 10281.
+              Validación calculada de forma inalterable desde el servidor remoto para evitar reseteos locales.
             </p>
           </div>
 
-          <div className="bg-slate-50 border border-slate-300 rounded-lg p-3 text-right font-mono">
-            <span className="text-xs text-slate-500 block font-medium">Días restantes de validez</span>
-            <span className="text-2xl font-black text-emerald-800">
-              {licenseActive ? `${licenseDaysLeft} días` : `${trialDaysLeft} días`}
-            </span>
+          <div className="flex items-center gap-3">
+            <div className="bg-slate-50 border border-slate-300 rounded-lg p-3 text-right font-mono">
+              <span className="text-xs text-slate-500 block font-medium">Días restantes de validez</span>
+              <span className={`text-2xl font-black ${isExpired ? 'text-red-600' : 'text-emerald-800'}`}>
+                {licenseActive ? `${licenseDaysLeft} días` : `${trialDaysLeft} días`}
+              </span>
+            </div>
           </div>
+        </div>
+
+        {/* User CUIT / Identifier verification input */}
+        <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex-1 min-w-[280px]">
+            <label className="text-[11px] font-bold text-slate-700 block mb-1">
+              Identificador Único del Usuario / CUIT / Matrícula
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={userIdentifier}
+                onChange={(e) => setUserIdentifier(e.target.value)}
+                placeholder="Ej: CUIT 20-28491023-4 o email@profesional.com"
+                className="flex-1 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:outline-none focus:border-purple-600 font-bold"
+              />
+              <button
+                onClick={saveUserIdentifier}
+                disabled={isVerifying}
+                className="px-3 py-1.5 bg-[#0f2b48] hover:bg-slate-800 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1 shadow-xs disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isVerifying ? 'animate-spin' : ''}`} />
+                Verificar Servidor
+              </button>
+            </div>
+          </div>
+
+          {remoteMessage && (
+            <div className="w-full text-xs font-semibold text-slate-800 bg-white p-2 rounded border border-slate-300">
+              {remoteMessage}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* NEW: Gemini API Key Setup Card for Standalone Distribution */}
+      {/* Database Connection Instructions Card */}
+      <div className="bg-white border border-slate-300 rounded-xl p-5 shadow-sm space-y-3">
+        <h3 className="text-sm font-extrabold text-[#0f2b48] flex items-center gap-2 border-b border-slate-200 pb-2">
+          <Database className="w-4 h-4 text-blue-700" />
+          ¿Cómo conectar tu Base de Datos Remota (ej. Supabase) en Producción?
+        </h3>
+        <p className="text-xs text-slate-600 leading-relaxed">
+          Para conectar tu propia base de datos remota de <strong>Supabase</strong> (o PostgreSQL), simplemente configurá las variables de entorno en tu servidor de alojamiento (Vercel, Netlify o Cloud Run):
+        </p>
+        <div className="bg-slate-900 text-slate-100 font-mono text-xs p-3 rounded-lg space-y-1">
+          <div><span className="text-amber-400">SUPABASE_URL</span>=https://xyz.supabase.co</div>
+          <div><span className="text-amber-400">SUPABASE_ANON_KEY</span>=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...</div>
+        </div>
+        <p className="text-[11px] text-slate-500 italic">
+          * Si estas variables no se configuran, la aplicación utilizará automáticamente la validación por Servidor Backend Seguro sin requerir configuración adicional.
+        </p>
+      </div>
+
+      {/* Gemini API Key Setup Card for Standalone Distribution */}
       <div className="bg-white border border-slate-300 rounded-xl p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between border-b border-slate-200 pb-3">
           <h3 className="text-base font-extrabold text-[#0f2b48] flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-amber-700" />
-            Configuración de Clave API Key de Gemini (Procesamiento IA)
+            Clave API Key Personal de Google Gemini (Requisito de Propiedad del Cliente)
           </h3>
           <span className={`px-2.5 py-0.5 rounded text-[11px] font-bold ${
-            apiKeySaved ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-slate-100 text-slate-700 border border-slate-300'
+            apiKeySaved ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-amber-100 text-amber-900 border border-amber-300'
           }`}>
-            {apiKeySaved ? 'Clave Personal Activa' : 'Utilizando Clave Servidor'}
+            {apiKeySaved ? 'Clave Personal Configurada' : 'Sin Clave Personal (Requerida)'}
           </span>
         </div>
 
         <p className="text-xs text-slate-600 leading-relaxed">
-          Para que las funciones de <strong>Análisis con Inteligencia Artificial</strong> de planos y la <strong>Búsqueda de Precios Web</strong> funcionen al distribuir la app o usarla fuera del entorno de desarrollo, cargá tu clave API Key de Google Gemini.
+          Cada cliente / usuario debe utilizar su <strong>propia clave API Key personal de Google Gemini</strong> para realizar el análisis de planos por visión de IA y la búsqueda de precios web. La clave se guarda de forma privada en tu navegador.
         </p>
 
         <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
@@ -191,18 +318,6 @@ export default function LicenseTab() {
               {keyMessage}
             </div>
           )}
-
-          <div className="text-[11px] text-slate-600 space-y-1 pt-1 border-t border-slate-200">
-            <strong className="text-slate-800 font-bold block">¿Cómo obtener tu clave API Key gratuita?</strong>
-            <ol className="list-decimal pl-5 space-y-0.5">
-              <li>
-                Ingresá a Google AI Studio: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-800 underline font-bold">aistudio.google.com/app/apikey</a>
-              </li>
-              <li>Iniciá sesión con tu cuenta de Google.</li>
-              <li>Hacé clic en el botón azul <strong>&quot;Create API Key&quot;</strong> y copiá la clave generada.</li>
-              <li>Pegala en el campo superior y hacé clic en <strong>&quot;Guardar API Key&quot;</strong>.</li>
-            </ol>
-          </div>
         </div>
       </div>
 

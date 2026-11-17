@@ -3,12 +3,15 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { TechnicalParams, FloorData, MaterialItem, LaborItem, Circuit } from '@/lib/types';
+import { safeJsonParse } from '@/lib/safe-json';
 import {
   generateCircuits,
   calculateDemand,
   getElectrificationGrade,
   generateMaterialsList,
   generateLaborList,
+  calculatePhaseBalance,
+  calculateSectionalBoards,
 } from '@/lib/electrical-calc';
 import {
   Award,
@@ -33,6 +36,9 @@ import {
   ChevronDown,
   ChevronUp,
   MapPin,
+  Activity,
+  Sliders,
+  GitCommit,
 } from 'lucide-react';
 
 interface LoadReportProps {
@@ -104,8 +110,70 @@ const PHOTO_CATEGORIES: {
 export default function LoadReport({ params, floors }: LoadReportProps) {
   const floorCircuits = generateCircuits(params, floors);
   const allCircuits: Circuit[] = floorCircuits.flatMap((fc) => fc.c);
-  const demand = calculateDemand(allCircuits);
+  const demand = calculateDemand(allCircuits, params);
   const electrInfo = getElectrificationGrade(params.area);
+  const sectionalBoards = calculateSectionalBoards(params, floorCircuits, demand.isThreePhase);
+  const phaseBalance = calculatePhaseBalance(allCircuits, sectionalBoards, demand.isThreePhase);
+  const directTceCircuits = allCircuits.filter(
+    (c) => c.boardCode === 'TCE' || c.boardTarget === 'TP'
+  );
+  const orderedMultifilarCircuits: Circuit[] = [
+    ...directTceCircuits,
+    ...sectionalBoards.flatMap((sb) => sb.circuits),
+  ];
+  const circuitPhaseLookup = phaseBalance.circuitPhases;
+
+  const getReportCircuitPhase = (
+    circ: Circuit
+  ): { phaseY: number; phaseName: string; phaseColor: string; isThreePhase: boolean } => {
+    const assigned = circuitPhaseLookup[circ.id];
+    const is3P =
+      assigned === '3F' ||
+      Boolean(circ.isThreePhase) ||
+      circ.d.includes('380V') ||
+      circ.d.includes('Trifásico');
+
+    if (is3P) return { phaseY: 28, phaseName: '3F', phaseColor: '#dc2626', isThreePhase: true };
+    if (assigned === 'L1') return { phaseY: 28, phaseName: 'L1', phaseColor: '#92400e', isThreePhase: false };
+    if (assigned === 'L2') return { phaseY: 46, phaseName: 'L2', phaseColor: '#1e293b', isThreePhase: false };
+    if (assigned === 'L3') return { phaseY: 64, phaseName: 'L3', phaseColor: '#6b21a8', isThreePhase: false };
+
+    const isInL1 = phaseBalance.l1Circuits.some((c) => c.id === circ.id);
+    const isInL2 = phaseBalance.l2Circuits.some((c) => c.id === circ.id);
+    if (isInL1) return { phaseY: 28, phaseName: 'L1', phaseColor: '#92400e', isThreePhase: false };
+    if (isInL2) return { phaseY: 46, phaseName: 'L2', phaseColor: '#1e293b', isThreePhase: false };
+    return { phaseY: 64, phaseName: 'L3', phaseColor: '#6b21a8', isThreePhase: false };
+  };
+
+  const multifilarBoardGroups: {
+    boardCode: string;
+    colorTag?: string;
+    startIndex: number;
+    count: number;
+    dpmsWatts: number;
+  }[] = [];
+  let reportCursorIdx = 0;
+  if (directTceCircuits.length > 0) {
+    multifilarBoardGroups.push({
+      boardCode: 'TCE Directo',
+      startIndex: reportCursorIdx,
+      count: directTceCircuits.length,
+      dpmsWatts: directTceCircuits.reduce((s, c) => s + c.W, 0),
+    });
+    reportCursorIdx += directTceCircuits.length;
+  }
+  sectionalBoards.forEach((sb) => {
+    if (sb.circuits.length > 0) {
+      multifilarBoardGroups.push({
+        boardCode: sb.boardCode,
+        colorTag: sb.colorTag,
+        startIndex: reportCursorIdx,
+        count: sb.circuits.length,
+        dpmsWatts: sb.simultaneousWatts,
+      });
+      reportCursorIdx += sb.circuits.length;
+    }
+  });
 
   // Budget calculations & synced overrides with lazy initializer
   const [savedBudgetOverrides] = useState<{
@@ -115,13 +183,8 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
     customLaborQtys?: Record<string, number>;
   }>(() => {
     if (typeof window === 'undefined') return {};
-    try {
-      const saved = localStorage.getItem('electroplan_budget_overrides');
-      if (saved) return JSON.parse(saved);
-    } catch {
-      // ignore
-    }
-    return {};
+    const saved = localStorage.getItem('electroplan_budget_overrides');
+    return safeJsonParse(saved, {});
   });
 
   const baseMaterials = generateMaterialsList(params, floors, allCircuits);
@@ -157,16 +220,12 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
   // Technical Photos State
   const [photos, setPhotos] = useState<Record<string, TechnicalPhoto>>(() => {
     if (typeof window === 'undefined') return {};
-    try {
-      const saved = localStorage.getItem('electroplan_technical_photos');
-      if (saved) return JSON.parse(saved);
-    } catch {
-      // ignore
-    }
-    return {};
+    const saved = localStorage.getItem('electroplan_technical_photos');
+    return safeJsonParse(saved, {});
   });
 
   const [showPhotoUploader, setShowPhotoUploader] = useState<boolean>(true);
+  const [circuitSpacing, setCircuitSpacing] = useState<number>(115);
 
   // Persist photos to LocalStorage
   useEffect(() => {
@@ -249,6 +308,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
     AA: '#0284c7',  // Light Blue
     LAV: '#9333ea', // Purple
     TUE: '#ea580c', // Orange
+    CUE: '#dc2626', // Red / Carga Uso Específico
   };
 
   // PDF Generation Handler using jsPDF and html2canvas
@@ -558,7 +618,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
                 <div className="text-right text-[11px] text-slate-700 font-mono">
                   <div><strong>Fecha:</strong> <span suppressHydrationWarning>{currentDateStr}</span></div>
                   <div><strong>Provincia:</strong> Córdoba, Argentina</div>
-                  <div><strong>Hoja:</strong> 1 de 6</div>
+                  <div><strong>Hoja:</strong> 1 de 7</div>
                 </div>
               </div>
             </div>
@@ -610,7 +670,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
                   {demand.simultaneousDemandWatts.toLocaleString('es-AR')} W
                 </strong>
                 <span className="text-slate-700 font-mono text-[10px] block">
-                  cos φ = 0.85 (Res. ERSeP 50/17)
+                  cos φ = 0.90 (AEA 770 / ERSeP)
                 </span>
                 <span className="text-blue-900 text-[10px] block font-semibold">
                   In = {demand.demandedAmps.toFixed(1)} A · PIA {demand.generalBreakerAmps}A
@@ -626,17 +686,18 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
               </h3>
 
               <div className="border border-slate-300 rounded-lg overflow-hidden">
-                <table className="w-full text-left text-[10px]">
+                <table className="w-full text-left text-[9.5px]">
                   <thead>
                     <tr className="bg-[#0f2b48] text-white font-bold">
+                      <th className="p-1.5">Tablero</th>
                       <th className="p-1.5">Circuito</th>
+                      <th className="p-1.5">Fase</th>
                       <th className="p-1.5">Tipo</th>
                       <th className="p-1.5">Bocas</th>
                       <th className="p-1.5">Pot (W)</th>
                       <th className="p-1.5">Ib (A)</th>
                       <th className="p-1.5">PIA (In)</th>
-                      <th className="p-1.5">Sec. Calc (mm²)</th>
-                      <th className="p-1.5">Sec. Mín AEA</th>
+                      <th className="p-1.5">Sec. Calc</th>
                       <th className="p-1.5">Sec. Adopt.</th>
                       <th className="p-1.5">PE (mm²)</th>
                       <th className="p-1.5">Iz (A)</th>
@@ -648,31 +709,47 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
                     {allCircuits.map((circ, idx) => {
                       const ks = circ.t === 'IUG' ? 0.66 : circ.t === 'TUG' ? 0.7 : 1.0;
                       const dpmsW = Math.round(circ.W * ks);
-                      const safeV = params.V > 0 ? params.V : 220;
-                      const ib = dpmsW / safeV;
-                      const sCalc = (ib / 8).toFixed(2); // theoretical density estimation
-                      const minAeaSec = circ.t === 'IUG' ? 1.5 : 2.5;
+                      const { phaseName, isThreePhase } = getReportCircuitPhase(circ);
+                      const polesLabel = isThreePhase ? '4P' : '2P';
+                      const ib = isThreePhase
+                        ? dpmsW / (Math.sqrt(3) * 380 * 0.9)
+                        : dpmsW / (220 * (circ.t === 'CUE' ? 0.9 : 1.0));
+                      const sCalc = (ib / 8).toFixed(2);
 
-                      const izMap: Record<number, number> = {
-                        1.5: 15,
-                        2.5: 21,
-                        4.0: 28,
-                        6.0: 36,
-                        10.0: 50,
+                      const izMap1F: Record<number, number> = {
+                        1.5: 13,
+                        2.5: 18,
+                        4.0: 24,
+                        6.0: 31,
+                        10.0: 43,
+                        16.0: 59,
+                        25.0: 77,
+                        35.0: 96,
                       };
-                      const iz = izMap[circ.s] || 21;
+                      const izMap3F: Record<number, number> = {
+                        1.5: 11,
+                        2.5: 16,
+                        4.0: 21,
+                        6.0: 28,
+                        10.0: 38,
+                        16.0: 52,
+                        25.0: 68,
+                        35.0: 85,
+                      };
+                      const iz = (isThreePhase ? izMap3F : izMap1F)[circ.s] || 24;
                       const isCompliant = circ.deltaV <= 3.0 && circ.B <= iz;
 
                       return (
                         <tr key={circ.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                          <td className="p-1.5 font-black font-mono text-[#0f2b48]">{circ.boardCode || 'TS1'}</td>
                           <td className="p-1.5 font-bold font-mono text-slate-900">{circ.id}</td>
+                          <td className="p-1.5 font-mono font-bold text-purple-900">{isThreePhase ? '3F' : phaseName}</td>
                           <td className="p-1.5 font-semibold text-slate-800">{circ.t}</td>
                           <td className="p-1.5 text-slate-600 font-mono">{circ.q}</td>
                           <td className="p-1.5 font-mono text-slate-900">{circ.W} W</td>
                           <td className="p-1.5 font-mono text-slate-800">{ib.toFixed(1)} A</td>
-                          <td className="p-1.5 font-mono font-bold text-blue-800">{circ.B} A</td>
+                          <td className="p-1.5 font-mono font-bold text-blue-800">{polesLabel} {circ.B} A</td>
                           <td className="p-1.5 font-mono text-slate-600">{sCalc} mm²</td>
-                          <td className="p-1.5 font-mono text-slate-700">{minAeaSec} mm²</td>
                           <td className="p-1.5 font-mono font-bold text-slate-900">{circ.s} mm²</td>
                           <td className="p-1.5 font-mono text-emerald-800 font-bold">{circ.sPE} mm²</td>
                           <td className="p-1.5 font-mono text-slate-800">{iz} A</td>
@@ -696,28 +773,72 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
               </div>
             </div>
 
+            {/* Sectional Feeders Design Table: TCE -> TS1..TS4 */}
+            <div className="space-y-1.5">
+              <h3 className="text-xs font-black text-[#0f2b48] uppercase tracking-wide flex items-center gap-1.5">
+                <Zap className="w-4 h-4 text-amber-600" />
+                Diseño de Líneas Seccionales: TCE → Tableros Seccionales ({sectionalBoards.map((s) => s.boardCode).join(', ')})
+              </h3>
+              <div className="border border-slate-300 rounded-lg overflow-hidden">
+                <table className="w-full text-left text-[9.5px]">
+                  <thead>
+                    <tr className="bg-slate-800 text-white font-bold">
+                      <th className="p-1.5">Tablero</th>
+                      <th className="p-1.5">Sector / Zona</th>
+                      <th className="p-1.5">Dist.</th>
+                      <th className="p-1.5">Fase TCE</th>
+                      <th className="p-1.5">DPMS</th>
+                      <th className="p-1.5">Ib</th>
+                      <th className="p-1.5">PIA TCE</th>
+                      <th className="p-1.5">Cable TCE→TS</th>
+                      <th className="p-1.5">Caño</th>
+                      <th className="p-1.5">ΔV Lín.</th>
+                      <th className="p-1.5">ID TS</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {sectionalBoards.map((sb, idx) => (
+                      <tr key={sb.floorId} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                        <td className="p-1.5 font-black font-mono text-[#0f2b48]">{sb.boardCode}</td>
+                        <td className="p-1.5 font-semibold text-slate-800 truncate max-w-[110px]">{sb.boardName}</td>
+                        <td className="p-1.5 font-mono text-slate-700">{sb.feederLengthM}m</td>
+                        <td className="p-1.5 font-mono font-bold text-purple-900">{sb.assignedPhase}</td>
+                        <td className="p-1.5 font-mono font-bold text-amber-800">{sb.simultaneousWatts}W</td>
+                        <td className="p-1.5 font-mono text-slate-800">{sb.designCurrentIb}A</td>
+                        <td className="p-1.5 font-mono font-bold text-blue-800">{sb.isThreePhase ? '4P' : '2P'} {sb.tceBreakerIn}A</td>
+                        <td className="p-1.5 font-mono font-bold text-slate-900">{sb.conductorSpec}</td>
+                        <td className="p-1.5 font-mono text-slate-700">Ø{sb.conduitMm}</td>
+                        <td className="p-1.5 font-mono text-slate-800">{sb.feederDeltaVPercent}%</td>
+                        <td className="p-1.5 font-mono text-cyan-800 font-semibold">{sb.rcdPoles} {sb.rcdAmps}A</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             {/* Electroducts occupancy and thermal disipation */}
-            <div className="bg-slate-50 p-3 rounded-lg border border-slate-300 space-y-1.5 text-xs text-slate-700">
-              <strong className="text-slate-900 font-bold block text-[11px] border-b border-slate-200 pb-1">
+            <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-300 space-y-1 text-xs text-slate-700">
+              <strong className="text-slate-900 font-bold block text-[10.5px] border-b border-slate-200 pb-0.5">
                 Verificación de Electroductos y Factor de Ocupación Máxima (AEA 770.12 / IEC 61386-21):
               </strong>
-              <p className="text-[10.5px] leading-relaxed">
-                Todas las canalizaciones (caños rígidos de PVC ignífugo / hierro pesado o flexible aislante IRAM 62386) han sido verificadas respetando la regla reglamentaria de <strong>ocupación máxima del 35% de la sección interna útil del tubo</strong>. Esta reserva de espacio garantiza la disipación térmica de los conductores bajo factor de agrupamiento de 0.80 (AEA 771.16.II.b) y facilita el tendido sin fricción mecánica ni degradación de la aislación PVC.
+              <p className="text-[10px] leading-relaxed">
+                Todas las canalizaciones (alimentador Pilar→TCE, líneas seccionales TCE→{sectionalBoards.map((s) => s.boardCode).join('/')} y circuitos terminales) respetan la regla reglamentaria de <strong>ocupación máxima del 35% de la sección interna útil del tubo</strong>, garantizando disipación térmica a 40 °C y tendido sin fricción mecánica.
               </p>
             </div>
 
             {/* ERSeP Summary Specification Box */}
-            <div className="border border-[#0f2b48] bg-blue-50/40 rounded-lg p-3 space-y-2 text-xs text-slate-800">
-              <strong className="text-[#0f2b48] font-black block text-[11px] uppercase tracking-wide">
+            <div className="border border-[#0f2b48] bg-blue-50/40 rounded-lg p-2.5 space-y-1.5 text-xs text-slate-800">
+              <strong className="text-[#0f2b48] font-black block text-[10.5px] uppercase tracking-wide">
                 Planilla Resumen ERSeP de la Instalación Proyectada:
               </strong>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10.5px]">
-                <div>• Suministro: <strong>{params.sumType || 'Monofásico 220V'}</strong></div>
-                <div>• Caída Tensión Máx: <strong>ΔV = {Math.max(...allCircuits.map(c => c.deltaV), 0.5).toFixed(1)}% (≤ 3.0%)</strong></div>
-                <div>• Factor Simultaneidad: <strong>kₛ medio = 0.72</strong></div>
-                <div>• Resistencia Puesta a Tierra: <strong>R_PAT ≤ 10 Ω (Límite legal: 40 Ω)</strong></div>
-                <div>• Protección Cabecera: <strong>PIA 2P {demand.generalBreakerAmps}A (Icn ≥ 3kA)</strong></div>
-                <div>• Protección Diferencial: <strong>ID 2P 40A / 30mA (IEC 61008)</strong></div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-[10px]">
+                <div>• Suministro: <strong>{demand.isThreePhase ? 'Trifásico 380V (ET 22)' : 'Monofásico 220V (ET 21)'}</strong></div>
+                <div>• Arquitectura: <strong>TCE → {sectionalBoards.map((s) => s.boardCode).join(', ')}</strong></div>
+                <div>• Pilar → TCE: <strong>{demand.subfeederSectionMm} mm² Cu (Iz {demand.cableCapacityIz}A)</strong></div>
+                <div>• Resistencia PAT: <strong>R_PAT ≤ 10 Ω (Límite legal: 40 Ω)</strong></div>
+                <div>• Cabecera TCE: <strong>PIA {demand.isThreePhase ? '3P+N' : '2P'} {demand.generalBreakerAmps}A (Icn ≥ 3kA)</strong></div>
+                <div>• Diferenciales: <strong>30 mA en c/ TS ({sectionalBoards.length} unid.)</strong></div>
               </div>
             </div>
           </div>
@@ -755,7 +876,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
                 <div className="text-right text-[11px] text-slate-700 font-mono">
                   <div><strong>Potencia DPMS:</strong> {demand.simultaneousDemandWatts.toLocaleString('es-AR')} W</div>
                   <div><strong>Alimentador:</strong> {demand.subfeederSectionMm} mm² Cu</div>
-                  <div><strong>Hoja:</strong> 2 de 6</div>
+                  <div><strong>Hoja:</strong> 2 de 7</div>
                 </div>
               </div>
             </div>
@@ -820,10 +941,10 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
 
               <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-300 space-y-1">
                 <strong className="text-[#0f2b48] font-bold block text-[11px] border-b border-slate-200 pb-0.5">
-                  2. Tableros Principal TPA e Interior TPU (AEA 770.17):
+                  2. Tablero Central TCE y Seccionales ({sectionalBoards.map((s) => s.boardCode).join(', ')}):
                 </strong>
                 <p className="text-[10px] text-slate-700 leading-relaxed">
-                  Gabinete interior TPU de embutir aislante IP41 con doble aislación. Incorpora Interruptor Diferencial residual de 30 mA instantáneo, termomagnéticas por circuito y bornera colectora de PE aislada de masa.
+                  El Tablero Central de Entrada (TCE) recibe la acometida desde el pilar y distribuye radialmente mediante PIAs dedicadas hacia los tableros seccionales ({sectionalBoards.map((s) => s.boardCode).join(', ')}). Cada seccional incorpora Interruptor Diferencial de 30 mA y PIAs por circuito terminal.
                 </p>
               </div>
 
@@ -846,201 +967,222 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
               </div>
             </div>
 
-            {/* Vector Unifilar Diagram */}
+            {/* Vector Unifilar Diagram: TCE -> TS1..TS4 */}
             <div className="border border-slate-300 rounded-lg p-2.5 bg-white">
               <div className="overflow-x-auto">
                 {(() => {
-                  const pbCircuits = floorCircuits[0]?.c || [];
-                  const paCircuits = floorCircuits.slice(1).flatMap((fc) => fc.c);
-                  const hasMultiFloor = floorCircuits.length > 1 && paCircuits.length > 0;
-                  const maxCircuitsCount = Math.max(pbCircuits.length, paCircuits.length, allCircuits.length);
-                  const svgWidth = Math.max(820, maxCircuitsCount * 85 + 240);
-                  const svgHeight = hasMultiFloor ? 710 : 430;
+                  const maxCircuitsInAnyTs = sectionalBoards.reduce(
+                    (max, sb) => Math.max(max, sb.circuits.length),
+                    1
+                  );
+                  const tceFeederCount = sectionalBoards.length + directTceCircuits.length;
+                  const tsBlockHeight = 258;
+                  const tsBlockGap = 40;
+                  const tsStartY = 345;
+                  const neededWidthForTce = 210 + tceFeederCount * 145 + 50;
+                  const neededWidthForTs = 280 + maxCircuitsInAnyTs * 108 + 60;
+                  const svgWidth = Math.max(860, neededWidthForTce, neededWidthForTs);
+                  const svgHeight =
+                    tsStartY + Math.max(1, sectionalBoards.length) * (tsBlockHeight + tsBlockGap) + 16;
 
                   return (
                     <svg
                       viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-                      className="w-full h-auto min-w-[760px] font-sans"
-                      style={{ maxHeight: hasMultiFloor ? '660px' : '430px' }}
+                      className="w-full h-auto font-sans"
                     >
                       <rect width="100%" height="100%" fill="#ffffff" />
 
-                      {/* Feeder line from Pilar */}
-                      <line x1="120" y1="45" x2="120" y2="80" stroke="#0f2b48" strokeWidth="2.5" />
-
-                      {/* Medidor kWh Icon */}
-                      <rect x="85" y="10" width="70" height="35" rx="4" fill="#f8fafc" stroke="#0f2b48" strokeWidth="1.5" />
-                      <text x="120" y="26" fill="#0f2b48" fontSize="10" fontWeight="bold" textAnchor="middle">
-                        Medidor kWh
+                      {/* Medidor -> Interruptor General TCE */}
+                      <rect x="130" y="10" width="115" height="40" rx="4" fill="#f8fafc" stroke="#0f2b48" strokeWidth="1.6" />
+                      <text x="187" y="27" fill="#0f2b48" fontSize="10" fontWeight="bold" textAnchor="middle">
+                        Medidor EPEC
                       </text>
-                      <text x="120" y="38" fill="#475569" fontSize="7.5" textAnchor="middle">
-                        220 V ~ (EPEC ET21)
+                      <text x="187" y="40" fill="#475569" fontSize="8.5" textAnchor="middle">
+                        {demand.isThreePhase ? '380 V~ (ET22)' : '220 V~ (ET21)'}
                       </text>
 
-                      {/* Main Breaker Pilar */}
-                      <rect x="75" y="80" width="90" height="36" rx="4" fill="#ffffff" stroke="#0f2b48" strokeWidth="1.5" />
-                      <text x="120" y="94" fill="#0f2b48" fontSize="8.5" fontWeight="bold" textAnchor="middle">
-                        Interruptor Principal
-                      </text>
-                      <text x="120" y="107" fill="#2563eb" fontSize="8" fontWeight="bold" textAnchor="middle">
-                        2P – {demand.generalBreakerAmps} A (3kA)
-                      </text>
+                      <line x1="187" y1="50" x2="187" y2="74" stroke="#0f2b48" strokeWidth="2.8" />
 
-                      {/* Subfeeder Line Pilar to TGP */}
-                      <line x1="120" y1="116" x2="120" y2="155" stroke="#0f2b48" strokeWidth="2.5" />
-                      <text x="128" y="138" fill="#64748b" fontSize="7.5" fontWeight="semibold">
-                        Alim. {demand.subfeederSectionMm} mm² Cu ({params.L || 6}m)
+                      <rect x="115" y="74" width="144" height="42" rx="4" fill="#ffffff" stroke="#0f2b48" strokeWidth="1.8" />
+                      <text x="187" y="91" fill="#0f2b48" fontSize="9.5" fontWeight="bold" textAnchor="middle">
+                        PIA Cabecera TCE
+                      </text>
+                      <text x="187" y="106" fill="#2563eb" fontSize="9.5" fontWeight="bold" textAnchor="middle">
+                        {demand.isThreePhase ? '3P+N' : '2P'} – {demand.generalBreakerAmps} A
                       </text>
 
-                      {/* RCD Differential Breaker */}
-                      <rect x="75" y="155" width="90" height="36" rx="4" fill="#ffffff" stroke="#0f2b48" strokeWidth="1.5" />
-                      <text x="120" y="169" fill="#0f2b48" fontSize="8.5" fontWeight="bold" textAnchor="middle">
-                        Diferencial TGP
-                      </text>
-                      <text x="120" y="182" fill="#0284c7" fontSize="8" fontWeight="bold" textAnchor="middle">
-                        30 mA – 2P (40 A)
+                      <line x1="187" y1="116" x2="187" y2="162" stroke="#0f2b48" strokeWidth="2.8" />
+                      <text x="198" y="143" fill="#334155" fontSize="9" fontWeight="bold">
+                        Pilar → TCE: {demand.subfeederSectionMm} mm² Cu + PE ({(params.distPillar || 0) + (params.L || 6)}m)
                       </text>
 
-                      {/* Line to Main Busbar */}
-                      <line x1="120" y1="191" x2="120" y2="225" stroke="#0f2b48" strokeWidth="2.5" />
-
-                      {/* Grounding System PAT (IRAM 2309) */}
-                      <line x1="120" y1="225" x2="55" y2="225" stroke="#16a34a" strokeWidth="2" strokeDasharray="3,3" />
-                      <circle cx="55" cy="225" r="4" fill="#16a34a" />
-                      <line x1="55" y1="229" x2="55" y2="242" stroke="#16a34a" strokeWidth="2" />
-                      <line x1="41" y1="242" x2="69" y2="242" stroke="#16a34a" strokeWidth="2" />
-                      <line x1="45" y1="246" x2="65" y2="246" stroke="#16a34a" strokeWidth="2" />
-                      <line x1="49" y1="250" x2="61" y2="250" stroke="#16a34a" strokeWidth="2" />
-
-                      {/* PAT Box Label */}
-                      <rect x="5" y="255" width="110" height="26" rx="4" fill="#f0fdf4" stroke="#16a34a" strokeWidth="1.2" />
-                      <text x="60" y="267" fill="#15803d" fontSize="8" fontWeight="bold" textAnchor="middle">
+                      {/* PAT Jabalina */}
+                      <rect x="315" y="12" width="145" height="46" rx="5" fill="#f0fdf4" stroke="#16a34a" strokeWidth="1.4" />
+                      <text x="387" y="30" fill="#15803d" fontSize="9.5" fontWeight="bold" textAnchor="middle">
                         PAT Jabalina 10 mm²
                       </text>
-                      <text x="60" y="277" fill="#166534" fontSize="7" fontWeight="bold" textAnchor="middle">
+                      <text x="387" y="45" fill="#166534" fontSize="8.5" fontWeight="bold" textAnchor="middle">
                         IRAM 2309 (R ≤ 10 Ω)
                       </text>
+                      <line x1="315" y1="35" x2="285" y2="35" stroke="#16a34a" strokeWidth="2.2" strokeDasharray="3,2" />
+                      <line x1="285" y1="35" x2="285" y2="162" stroke="#16a34a" strokeWidth="2.2" strokeDasharray="3,2" />
 
-                      {/* Single vs Multi Floor Busbars */}
-                      {!hasMultiFloor ? (
-                        <g>
-                          <line x1={120} y1="225" x2={Math.max(760, allCircuits.length * 85 + 210)} y2="225" stroke="#0f2b48" strokeWidth="3" />
-                          <text x={125} y="215" fill="#0f2b48" fontSize="8.5" fontWeight="black">TGP (TABLERO GENERAL PRINCIPAL)</text>
-                          {allCircuits.map((circ, idx) => {
-                            const posX = 175 + idx * 85;
-                            const color = CIRCUIT_COLORS[circ.t] || '#0f2b48';
-                            return (
-                              <g key={circ.id}>
-                                <line x1={posX} y1="225" x2={posX} y2="252" stroke="#0f2b48" strokeWidth="2" />
-                                <rect x={posX - 30} y="252" width="60" height="30" rx="4" fill="#ffffff" stroke="#0f2b48" strokeWidth="1.5" />
-                                <text x={posX} y="265" fill="#0f2b48" fontSize="8" fontWeight="bold" textAnchor="middle">{circ.id}</text>
-                                <text x={posX} y="277" fill="#2563eb" fontSize="7.5" fontWeight="bold" textAnchor="middle">{circ.B} A</text>
-                                <line x1={posX} y1="282" x2={posX} y2="315" stroke={color} strokeWidth="3" />
-                                <circle cx={posX} cy="330" r="13" fill={color} stroke="#0f2b48" strokeWidth="1" />
-                                <text x={posX} y="334" fill="#ffffff" fontSize="9" fontWeight="bold" textAnchor="middle">{circ.t}</text>
-                                <text x={posX} y="354" fill="#0f172a" fontSize="7.5" fontWeight="bold" textAnchor="middle">{circ.d.slice(0, 13)}</text>
-                                <text x={posX} y="365" fill="#475569" fontSize="7" textAnchor="middle">{circ.q} bocas</text>
-                                <text x={posX} y="376" fill="#0f172a" fontSize="7.5" fontWeight="bold" textAnchor="middle">{circ.s} mm²</text>
-                                <text x={posX} y="387" fill="#0f2b48" fontSize="7" fontWeight="bold" textAnchor="middle">{circ.W} W ({circ.I.toFixed(1)}A)</text>
-                                <text x={posX} y="398" fill="#2563eb" fontSize="6.5" textAnchor="middle">ΔV: {circ.deltaV}%</text>
-                              </g>
-                            );
-                          })}
-                        </g>
-                      ) : (
-                        /* Multi-Floor Layout: TS-PA placed DEBAJO (underneath) TGP */
-                        (() => {
-                          const pbStartX = 120;
-                          const pbEndX = Math.max(pbStartX + 180, 175 + pbCircuits.length * 85);
-                          const tsX = pbEndX + 45;
+                      {/* TCE Container */}
+                      <rect x="125" y="156" width={svgWidth - 145} height="144" rx="6" fill="#f8fafc" stroke="#0f2b48" strokeWidth="2" />
+                      <text x="140" y="175" fill="#0f2b48" fontSize="10" fontWeight="black">
+                        TCE — TABLERO CENTRAL DE ENTRADA ({allCircuits.length} ctos totales · DPMS: {demand.simultaneousDemandWatts.toLocaleString('es-AR')} W)
+                      </text>
+                      <line x1="142" y1="188" x2={svgWidth - 36} y2="188" stroke="#0f2b48" strokeWidth="3.5" />
 
-                          const tsBoxY = 430;
-                          const tsBoxX = 120;
-                          const tsBoxWidth = Math.max(520, paCircuits.length * 85 + 160);
+                      {sectionalBoards.map((sb, idx) => {
+                        const piaX = 212 + idx * 145;
+                        const riserX = 20 + idx * 16;
+                        const channelY = 308 + idx * 6;
+                        const tsBoxY = tsStartY + idx * (tsBlockHeight + tsBlockGap);
+                        const tsTapY = tsBoxY + 52;
 
-                          return (
-                            <g>
-                              {/* TGP Main Busbar (Planta Baja) */}
-                              <line x1={pbStartX} y1="225" x2={tsX} y2="225" stroke="#0f2b48" strokeWidth="3.5" />
-                              <text x={125} y="215" fill="#0f2b48" fontSize="8.5" fontWeight="black">TGP (PLANTA BAJA)</text>
+                        return (
+                          <g key={sb.floorId}>
+                            <line x1={piaX} y1="188" x2={piaX} y2="206" stroke="#0f2b48" strokeWidth="2.2" />
+                            <rect x={piaX - 60} y="206" width="120" height="64" rx="4" fill="#fef3c7" stroke="#d97706" strokeWidth="1.8" />
+                            <text x={piaX} y="221" fill="#92400e" fontSize="9.5" fontWeight="black" textAnchor="middle">
+                              PIA → {sb.boardCode}{sb.colorTag ? ` (${sb.colorTag})` : ''}
+                            </text>
+                            <text x={piaX} y="235" fill="#b45309" fontSize="9" fontWeight="bold" textAnchor="middle">
+                              {sb.isThreePhase ? '4P' : '2P'} {sb.tceBreakerIn}A ({sb.assignedPhase})
+                            </text>
+                            <text x={piaX} y="249" fill="#78350f" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                              {sb.cableSectionMm}mm² · ΔV {sb.feederDeltaVPercent}%
+                            </text>
+                            <text x={piaX} y="263" fill="#92400e" fontSize="8" fontWeight="bold" textAnchor="middle">
+                              {sb.simultaneousWatts}W ({sb.circuits.length} ctos)
+                            </text>
+                            <polyline
+                              points={`${piaX},270 ${piaX},${channelY} ${riserX},${channelY} ${riserX},${tsTapY} 144,${tsTapY}`}
+                              fill="none"
+                              stroke="#d97706"
+                              strokeWidth="2.5"
+                              strokeDasharray="5,3"
+                            />
+                            <circle cx={144} cy={tsTapY} r="4" fill="#d97706" />
+                          </g>
+                        );
+                      })}
 
-                              {pbCircuits.map((circ, idx) => {
-                                const posX = 175 + idx * 85;
-                                const color = CIRCUIT_COLORS[circ.t] || '#0f2b48';
-                                return (
-                                  <g key={circ.id}>
-                                    <line x1={posX} y1="225" x2={posX} y2="252" stroke="#0f2b48" strokeWidth="2" />
-                                    <rect x={posX - 30} y="252" width="60" height="30" rx="4" fill="#ffffff" stroke="#0f2b48" strokeWidth="1.5" />
-                                    <text x={posX} y="265" fill="#0f2b48" fontSize="8" fontWeight="bold" textAnchor="middle">{circ.id}</text>
-                                    <text x={posX} y="277" fill="#2563eb" fontSize="7.5" fontWeight="bold" textAnchor="middle">{circ.B} A</text>
-                                    <line x1={posX} y1="282" x2={posX} y2="315" stroke={color} strokeWidth="3" />
-                                    <circle cx={posX} cy="330" r="13" fill={color} stroke="#0f2b48" strokeWidth="1" />
-                                    <text x={posX} y="334" fill="#ffffff" fontSize="9" fontWeight="bold" textAnchor="middle">{circ.t}</text>
-                                    <text x={posX} y="354" fill="#0f172a" fontSize="7.5" fontWeight="bold" textAnchor="middle">{circ.d.slice(0, 13)}</text>
-                                    <text x={posX} y="365" fill="#475569" fontSize="7" textAnchor="middle">{circ.q} bocas</text>
-                                    <text x={posX} y="376" fill="#0f172a" fontSize="7.5" fontWeight="bold" textAnchor="middle">{circ.s} mm²</text>
-                                    <text x={posX} y="387" fill="#0f2b48" fontSize="7" fontWeight="bold" textAnchor="middle">{circ.W} W ({circ.I.toFixed(1)}A)</text>
-                                    <text x={posX} y="398" fill="#2563eb" fontSize="6.5" textAnchor="middle">ΔV: {circ.deltaV}%</text>
-                                  </g>
-                                );
-                              })}
+                      {directTceCircuits.map((circ, idx) => {
+                        const posX = 212 + (sectionalBoards.length + idx) * 145;
+                        const { phaseName, isThreePhase } = getReportCircuitPhase(circ);
+                        return (
+                          <g key={circ.id}>
+                            <line x1={posX} y1="188" x2={posX} y2="206" stroke="#0f2b48" strokeWidth="2.2" />
+                            <rect x={posX - 60} y="206" width="120" height="66" rx="4" fill="#fef2f2" stroke="#dc2626" strokeWidth="1.8" />
+                            <text x={posX} y="221" fill="#991b1b" fontSize="9.5" fontWeight="black" textAnchor="middle">
+                              {circ.id} (Directo TCE)
+                            </text>
+                            <text x={posX} y="235" fill="#dc2626" fontSize="9" fontWeight="bold" textAnchor="middle">
+                              {isThreePhase ? '4P' : '2P'} {circ.B}A · {isThreePhase ? '3F' : phaseName}
+                            </text>
+                            <text x={posX} y="249" fill="#7f1d1d" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                              {circ.s}mm² · ΔV {circ.deltaV}%
+                            </text>
+                            <text x={posX} y="263" fill="#0f172a" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                              {circ.W} W ({circ.I.toFixed(1)}A)
+                            </text>
+                          </g>
+                        );
+                      })}
 
-                              {/* SECTIONAL FEEDER SWITCH IN TGP */}
-                              <line x1={tsX} y1="225" x2={tsX} y2="252" stroke="#0f2b48" strokeWidth="2.5" />
-                              <rect x={tsX - 35} y="252" width="70" height="32" rx="4" fill="#fef3c7" stroke="#d97706" strokeWidth="1.8" />
-                              <text x={tsX} y="265" fill="#92400e" fontSize="7.5" fontWeight="bold" textAnchor="middle">Term. Seccional</text>
-                              <text x={tsX} y="277" fill="#b45309" fontSize="7" fontWeight="extrabold" textAnchor="middle">2P – {demand.generalBreakerAmps}A</text>
+                      {sectionalBoards.map((sb, idx) => {
+                        const tsBoxY = tsStartY + idx * (tsBlockHeight + tsBlockGap);
+                        const tsBoxX = 128;
+                        const tsBoxWidth = svgWidth - 148;
+                        const busY = tsBoxY + 86;
 
-                              {/* Feeder cable going down from TGP to TS-PA underneath */}
-                              <line x1={tsX} y1="284" x2={tsX} y2="410" stroke="#d97706" strokeWidth="2.5" strokeDasharray="5,3" />
-                              <line x1={tsX} y1="410" x2={165} y2="410" stroke="#d97706" strokeWidth="2.5" strokeDasharray="5,3" />
-                              <line x1={165} y1="410" x2={165} y2="455" stroke="#d97706" strokeWidth="2.5" strokeDasharray="5,3" />
+                        return (
+                          <g key={sb.floorId}>
+                            <text x={tsBoxX + 10} y={tsBoxY - 7} fill="#92400e" fontSize="9" fontWeight="bold">
+                              TCE → {sb.boardCode}: {sb.conductorSpec} · L={sb.feederLengthM}m · Ø{sb.conduitMm}mm · ΔV:{sb.feederDeltaVPercent}% · {sb.assignedPhase}
+                            </text>
+                            <rect
+                              x={tsBoxX}
+                              y={tsBoxY}
+                              width={tsBoxWidth}
+                              height={tsBlockHeight}
+                              rx="6"
+                              fill="#ffffff"
+                              stroke="#0284c7"
+                              strokeWidth="1.8"
+                              strokeDasharray="6,3"
+                            />
+                            <text x={tsBoxX + 14} y={tsBoxY + 20} fill="#0369a1" fontSize="10" fontWeight="black">
+                              {sb.boardCode}{sb.colorTag ? ` [${sb.colorTag}]` : ''} — {sb.boardName.toUpperCase()} ({sb.circuits.length} ctos · DPMS: {sb.simultaneousWatts}W · Ib: {sb.designCurrentIb}A · {sb.recommendedDinBox} mód.)
+                            </text>
+                            <rect x={144} y={tsBoxY + 32} width="98" height="40" rx="4" fill="#f0f9ff" stroke="#0284c7" strokeWidth="1.5" />
+                            <text x="193" y={tsBoxY + 48} fill="#0369a1" fontSize="9" fontWeight="bold" textAnchor="middle">
+                              ID {sb.boardCode}
+                            </text>
+                            <text x="193" y={tsBoxY + 62} fill="#0284c7" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                              {sb.rcdPoles} {sb.rcdAmps}A 30mA
+                            </text>
 
-                              <text x={180} y="423" fill="#92400e" fontSize="7.5" fontWeight="bold">
-                                Alimentación Directa TS-PA: Cable {demand.sectionalFeederSectionMm} mm² Cu (Misma sección alim. principal)
+                            <line x1="193" y1={tsBoxY + 72} x2="193" y2={busY} stroke="#0f2b48" strokeWidth="2.5" />
+                            <line x1="193" y1={busY} x2={tsBoxX + tsBoxWidth - 20} y2={busY} stroke="#0f2b48" strokeWidth="3" />
+
+                            {sb.circuits.length === 0 && (
+                              <text
+                                x={tsBoxX + tsBoxWidth / 2}
+                                y={busY + 70}
+                                fill="#64748b"
+                                fontSize="10"
+                                fontWeight="bold"
+                                textAnchor="middle"
+                              >
+                                Sin cargas asignadas en {sb.boardCode}. Agregue cargas en Pestaña 1 o Pestaña 2.
                               </text>
+                            )}
 
-                              {/* TABLERO SECCIONAL BOX (TS-PA · PLANTA ALTA) PLACED BELOW TGP */}
-                              <rect x={tsBoxX} y={tsBoxY} width={tsBoxWidth} height="260" rx="6" fill="#f8fafc" stroke="#0284c7" strokeWidth="1.8" strokeDasharray="5,3" />
-                              <text x={tsBoxX + 15} y={tsBoxY + 18} fill="#0369a1" fontSize="9" fontWeight="black">
-                                TABLERO SECCIONAL (TS-PA · PLANTA ALTA)
-                              </text>
-
-                              {/* Diferencial TS-PA Breaker */}
-                              <rect x={145} y={tsBoxY + 28} width="85" height="32" rx="4" fill="#ffffff" stroke="#0284c7" strokeWidth="1.5" />
-                              <text x={187} y={tsBoxY + 41} fill="#0369a1" fontSize="7.5" fontWeight="bold" textAnchor="middle">Diferencial TS-PA</text>
-                              <text x={187} y={tsBoxY + 53} fill="#0284c7" fontSize="7" fontWeight="bold" textAnchor="middle">30 mA – 2P</text>
-
-                              {/* TS-PA Busbar */}
-                              <line x1={187} y1={tsBoxY + 60} x2={187} y2={tsBoxY + 85} stroke="#0f2b48" strokeWidth="2.5" />
-                              <line x1={187} y1={tsBoxY + 85} x2={tsBoxX + tsBoxWidth - 25} y2={tsBoxY + 85} stroke="#0f2b48" strokeWidth="3" />
-
-                              {/* PA Circuits under TS-PA */}
-                              {paCircuits.map((circ, idx) => {
-                                const posX = 240 + idx * 85;
-                                const color = CIRCUIT_COLORS[circ.t] || '#0f2b48';
-                                const busY = tsBoxY + 85;
-                                return (
-                                  <g key={circ.id}>
-                                    <line x1={posX} y1={busY} x2={posX} y2={busY + 27} stroke="#0f2b48" strokeWidth="2" />
-                                    <rect x={posX - 30} y={busY + 27} width="60" height="30" rx="4" fill="#ffffff" stroke="#0f2b48" strokeWidth="1.5" />
-                                    <text x={posX} y={busY + 40} fill="#0f2b48" fontSize="8" fontWeight="bold" textAnchor="middle">{circ.id}</text>
-                                    <text x={posX} y={busY + 52} fill="#2563eb" fontSize="7.5" fontWeight="bold" textAnchor="middle">{circ.B} A</text>
-                                    <line x1={posX} y1={busY + 57} x2={posX} y2={busY + 88} stroke={color} strokeWidth="3" />
-                                    <circle cx={posX} cy={busY + 102} r="13" fill={color} stroke="#0f2b48" strokeWidth="1" />
-                                    <text x={posX} y={busY + 106} fill="#ffffff" fontSize="9" fontWeight="bold" textAnchor="middle">{circ.t}</text>
-                                    <text x={posX} y={busY + 126} fill="#0f172a" fontSize="7.5" fontWeight="bold" textAnchor="middle">{circ.d.slice(0, 13)}</text>
-                                    <text x={posX} y={busY + 137} fill="#475569" fontSize="7" textAnchor="middle">{circ.q} bocas</text>
-                                    <text x={posX} y={busY + 148} fill="#0f172a" fontSize="7.5" fontWeight="bold" textAnchor="middle">{circ.s} mm²</text>
-                                    <text x={posX} y={busY + 159} fill="#0f2b48" fontSize="7" fontWeight="bold" textAnchor="middle">{circ.W} W ({circ.I.toFixed(1)}A)</text>
-                                    <text x={posX} y={busY + 170} fill="#2563eb" fontSize="6.5" textAnchor="middle">ΔV: {circ.deltaV}%</text>
-                                  </g>
-                                );
-                              })}
-                            </g>
-                          );
-                        })()
-                      )}
+                            {sb.circuits.map((circ, cIdx) => {
+                              const posX = 296 + cIdx * 108;
+                              const color = CIRCUIT_COLORS[circ.t] || '#0f2b48';
+                              const { phaseName, isThreePhase } = getReportCircuitPhase(circ);
+                              return (
+                                <g key={circ.id}>
+                                  <line x1={posX} y1={busY} x2={posX} y2={busY + 20} stroke="#0f2b48" strokeWidth="2" />
+                                  <rect
+                                    x={posX - 38}
+                                    y={busY + 20}
+                                    width="76"
+                                    height="36"
+                                    rx="4"
+                                    fill="#ffffff"
+                                    stroke={isThreePhase ? '#dc2626' : '#0f2b48'}
+                                    strokeWidth="1.5"
+                                  />
+                                  <text x={posX} y={busY + 34} fill="#0f2b48" fontSize="9" fontWeight="bold" textAnchor="middle">
+                                    {circ.id} · {phaseName}
+                                  </text>
+                                  <text x={posX} y={busY + 48} fill="#2563eb" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                                    {isThreePhase ? '4P' : '2P'} {circ.B} A
+                                  </text>
+                                  <line x1={posX} y1={busY + 56} x2={posX} y2={busY + 76} stroke={color} strokeWidth="2.8" />
+                                  <circle cx={posX} cy={busY + 89} r="13" fill={color} stroke="#0f2b48" strokeWidth="1" />
+                                  <text x={posX} y={busY + 93} fill="#ffffff" fontSize="9.5" fontWeight="bold" textAnchor="middle">{circ.t}</text>
+                                  <text x={posX} y={busY + 114} fill="#0f172a" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                                    {circ.d.length > 13 ? circ.d.slice(0, 12) + '..' : circ.d}
+                                  </text>
+                                  <text x={posX} y={busY + 126} fill="#475569" fontSize="8" textAnchor="middle">{circ.q}</text>
+                                  <text x={posX} y={busY + 139} fill="#0f2b48" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                                    {circ.s}mm² · ΔV {circ.deltaV}%
+                                  </text>
+                                  <text x={posX} y={busY + 151} fill="#0f172a" fontSize="8.5" fontWeight="black" textAnchor="middle">
+                                    {circ.W}W ({circ.I.toFixed(1)}A)
+                                  </text>
+                                </g>
+                              );
+                            })}
+                          </g>
+                        );
+                      })}
                     </svg>
                   );
                 })()}
@@ -1051,7 +1193,403 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
           {/* Footer */}
           <div className="border-t border-slate-300 pt-2 flex items-center justify-between text-[10px] text-slate-500 font-medium">
             <span>ElectroPlan AR · Software de Cálculo Eléctrico Ley 10281</span>
-            <span>Hoja 2 de 6 · Descripción de Trabajos y Unifilar (Sección 02 ERSeP)</span>
+            <span>Hoja 2 de 7 · Descripción de Trabajos y Unifilar (Sección 02 ERSeP)</span>
+          </div>
+        </section>
+
+        {/* ========================================================================= */}
+        {/* HOJA 2B: SECCIÓN 02B - DIAGRAMA MULTIFILAR Y BALANCE DE FASES L1, L2, L3 */}
+        {/* ========================================================================= */}
+        <section
+          className="pdf-dossier-page bg-white border-2 border-[#0f2b48] rounded-xl p-6 sm:p-8 shadow-sm text-slate-900 max-w-[860px] mx-auto flex flex-col justify-between"
+          style={{ minHeight: '1130px' }}
+        >
+          <div className="space-y-4">
+            {/* Header ERSeP Model */}
+            <div className="border-b-2 border-[#0f2b48] pb-3">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-slate-100 border border-[#0f2b48] text-[#0f2b48] rounded text-[10px] font-black uppercase tracking-wider mb-1.5">
+                    <Layers className="w-3.5 h-3.5 text-purple-700" />
+                    Esquema de Distribución Multifilar · AEA 90364-7-770
+                  </div>
+                  <h2 className="text-lg font-black text-[#0f2b48] tracking-tight">
+                    02B · DIAGRAMA MULTIFILAR Y BALANCE DE FASES (380V / 220V)
+                  </h2>
+                  <p className="text-[11px] text-slate-600 font-medium">
+                    Distribución de Circuitos por Fases L1 (R), L2 (S), L3 (T), Neutro y Puesta a Tierra (PE)
+                  </p>
+                </div>
+                <div className="text-right text-[11px] text-slate-700 font-mono">
+                  <div><strong>Tensión Suministro:</strong> {demand.isThreePhase ? '380V Trifásico' : '220V Monofásico'}</div>
+                  <div><strong>Alimentador:</strong> {demand.subfeederSectionMm} mm² Cu</div>
+                  <div><strong>Hoja:</strong> 3 de 7</div>
+                </div>
+              </div>
+            </div>
+
+            {/* 3-Phase Phase Balance Summary Cards */}
+            <div className="bg-slate-50 border border-slate-300 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                <strong className="text-[#0f2b48] font-black text-[11px] uppercase flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5 text-emerald-700" />
+                  Equilibrio de Fases por Seccional (1°) y Consolidado en TCE (2° · AEA ≤ 15%)
+                </strong>
+                {phaseBalance.isBalanced ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-900 border border-emerald-400 text-[10px] font-bold rounded-full">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-700" />
+                    Balance TCE Óptimo ({phaseBalance.unbalancePercent}% ≤ 15%)
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-900 border border-amber-400 text-[10px] font-bold rounded-full">
+                    <Sliders className="w-3 h-3 text-amber-700" />
+                    Desequilibrio TCE: {phaseBalance.unbalancePercent}%
+                  </span>
+                )}
+              </div>
+
+              {/* Compact 1st-level internal balance per TS */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {sectionalBoards.map((sb) => {
+                  const ipb = sb.internalPhaseBalance;
+                  return (
+                    <div key={sb.floorId} className="bg-white border border-slate-300 rounded p-1.5 text-[9px] font-mono">
+                      <div className="flex items-center justify-between font-bold border-b border-slate-200 pb-0.5 mb-0.5">
+                        <span className="text-[#0f2b48]">
+                          {sb.boardCode}{sb.colorTag ? ` (${sb.colorTag})` : ''}
+                        </span>
+                        <span className={ipb.isBalanced ? 'text-emerald-700' : 'text-amber-700'}>
+                          {sb.isThreePhase ? `${ipb.unbalancePercent}%` : sb.assignedPhase}
+                        </span>
+                      </div>
+                      <div className="text-slate-700 flex justify-between">
+                        <span>L1:{ipb.wattsL1}W</span>
+                        <span>L2:{ipb.wattsL2}W</span>
+                        <span>L3:{ipb.wattsL3}W</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5">
+                {/* L1 (R) */}
+                <div className="bg-amber-50/80 border border-amber-400 rounded-lg p-2 space-y-1">
+                  <div className="flex items-center justify-between border-b border-amber-200 pb-1">
+                    <span className="font-extrabold text-[10px] text-amber-900 uppercase flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-600 inline-block" />
+                      FASE L1 (R)
+                    </span>
+                    <span className="text-[10px] font-mono font-bold text-amber-900">{phaseBalance.ampsL1} A</span>
+                  </div>
+                  <div className="text-base font-black text-amber-900 font-mono tracking-tight">
+                    {phaseBalance.wattsL1.toLocaleString('es-AR')} <span className="text-[9px] font-normal text-slate-600">W</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {phaseBalance.l1Circuits.map((c) => (
+                      <span key={c.id} className="px-1.5 py-0.2 bg-amber-100 text-amber-900 border border-amber-300 rounded font-mono text-[9px] font-bold">
+                        {c.id} ({c.t})
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* L2 (S) */}
+                <div className="bg-slate-100 border border-slate-400 rounded-lg p-2 space-y-1">
+                  <div className="flex items-center justify-between border-b border-slate-300 pb-1">
+                    <span className="font-extrabold text-[10px] text-slate-900 uppercase flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-full bg-slate-800 inline-block" />
+                      FASE L2 (S)
+                    </span>
+                    <span className="text-[10px] font-mono font-bold text-slate-900">{phaseBalance.ampsL2} A</span>
+                  </div>
+                  <div className="text-base font-black text-slate-900 font-mono tracking-tight">
+                    {phaseBalance.wattsL2.toLocaleString('es-AR')} <span className="text-[9px] font-normal text-slate-600">W</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {phaseBalance.l2Circuits.map((c) => (
+                      <span key={c.id} className="px-1.5 py-0.2 bg-slate-200 text-slate-900 border border-slate-400 rounded font-mono text-[9px] font-bold">
+                        {c.id} ({c.t})
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* L3 (T) */}
+                <div className="bg-purple-50/80 border border-purple-400 rounded-lg p-2 space-y-1">
+                  <div className="flex items-center justify-between border-b border-purple-200 pb-1">
+                    <span className="font-extrabold text-[10px] text-purple-900 uppercase flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-full bg-purple-700 inline-block" />
+                      FASE L3 (T)
+                    </span>
+                    <span className="text-[10px] font-mono font-bold text-purple-900">{phaseBalance.ampsL3} A</span>
+                  </div>
+                  <div className="text-base font-black text-purple-900 font-mono tracking-tight">
+                    {phaseBalance.wattsL3.toLocaleString('es-AR')} <span className="text-[9px] font-normal text-slate-600">W</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {phaseBalance.l3Circuits.map((c) => (
+                      <span key={c.id} className="px-1.5 py-0.2 bg-purple-100 text-purple-900 border border-purple-300 rounded font-mono text-[9px] font-bold">
+                        {c.id} ({c.t})
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Vector Multifilar Diagram (SVG) */}
+            <div className="border border-slate-300 rounded-lg p-2.5 bg-white space-y-2">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-1">
+                <div className="flex items-center gap-4">
+                  <strong className="text-[#0f2b48] font-black text-[11px] uppercase flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-purple-700" />
+                    Diagrama Multifilar Esquemático de Distribución (R, S, T, N, PE)
+                  </strong>
+                  
+                  {/* Spacing Slider for Legibility Adjustment (Hidden in Print) */}
+                  <div className="flex items-center gap-2 bg-slate-100 px-2 py-0.5 rounded border border-slate-200 no-print scale-90 origin-left">
+                    <Sliders className="w-3 h-3 text-slate-500" />
+                    <input
+                      type="range"
+                      min="90"
+                      max="200"
+                      value={circuitSpacing}
+                      onChange={(e) => setCircuitSpacing(parseInt(e.target.value))}
+                      className="w-24 h-1 bg-slate-300 rounded-lg appearance-none cursor-pointer accent-[#0f2b48]"
+                    />
+                    <span className="text-[9px] font-mono text-slate-600 font-bold w-7">{circuitSpacing}px</span>
+                  </div>
+                </div>
+                <span className="text-[9px] font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded border border-slate-300">
+                  AEA 90364-7-770 · EPEC ET22 / ET21
+                </span>
+              </div>
+
+              <div className="overflow-x-auto bg-slate-50 rounded p-2 border border-slate-200">
+                {(() => {
+                  const totalCircuits = orderedMultifilarCircuits.length;
+                  const startX = 230;
+                  const svgWidth = Math.max(820, totalCircuits * circuitSpacing + startX + 60);
+                  const svgHeight = 420;
+
+                  return (
+                    <svg
+                      viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+                      className="w-full h-auto min-w-[740px] font-sans"
+                    >
+                      <rect width="100%" height="100%" fill="#ffffff" rx="4" />
+
+                      {/* Busbar Labels Left */}
+                      <text x="12" y="32" fill="#92400e" fontSize="10.5" fontWeight="extrabold">
+                        {demand.isThreePhase ? 'L1 (R)' : 'Fase (F)'}
+                      </text>
+                      <text
+                        x="12"
+                        y="50"
+                        fill={demand.isThreePhase ? '#1e293b' : '#94a3b8'}
+                        fontSize={demand.isThreePhase ? '10.5' : '9'}
+                        fontWeight="extrabold"
+                      >
+                        {demand.isThreePhase ? 'L2 (S)' : 'L2 (Libre)'}
+                      </text>
+                      <text
+                        x="12"
+                        y="68"
+                        fill={demand.isThreePhase ? '#6b21a8' : '#94a3b8'}
+                        fontSize={demand.isThreePhase ? '10.5' : '9'}
+                        fontWeight="extrabold"
+                      >
+                        {demand.isThreePhase ? 'L3 (T)' : 'L3 (Libre)'}
+                      </text>
+                      <text x="12" y="86" fill="#0284c7" fontSize="10.5" fontWeight="extrabold">Neutro (N)</text>
+                      <text x="12" y="104" fill="#16a34a" fontSize="10.5" fontWeight="extrabold">Tierra (PE)</text>
+
+                      {/* 5 Horizontal Busbars */}
+                      <line x1="78" y1="28" x2={svgWidth - 20} y2="28" stroke="#92400e" strokeWidth="3.2" />
+                      <line
+                        x1="78"
+                        y1="46"
+                        x2={svgWidth - 20}
+                        y2="46"
+                        stroke={demand.isThreePhase ? '#1e293b' : '#cbd5e1'}
+                        strokeWidth={demand.isThreePhase ? '3.2' : '1.8'}
+                        strokeDasharray={demand.isThreePhase ? undefined : '4,4'}
+                      />
+                      <line
+                        x1="78"
+                        y1="64"
+                        x2={svgWidth - 20}
+                        y2="64"
+                        stroke={demand.isThreePhase ? '#6b21a8' : '#cbd5e1'}
+                        strokeWidth={demand.isThreePhase ? '3.2' : '1.8'}
+                        strokeDasharray={demand.isThreePhase ? undefined : '4,4'}
+                      />
+                      <line x1="78" y1="82" x2={svgWidth - 20} y2="82" stroke="#0284c7" strokeWidth="3.2" />
+                      <line x1="78" y1="100" x2={svgWidth - 20} y2="100" stroke="#16a34a" strokeWidth="3.2" strokeDasharray="6,2" />
+
+                      {/* Main TCE Breaker Box */}
+                      <rect x="44" y="124" width="128" height="40" rx="4" fill="#ffffff" stroke="#0f2b48" strokeWidth="1.8" />
+                      <text x="108" y="140" fill="#0f2b48" fontSize="9.5" fontWeight="black" textAnchor="middle">
+                        TCE {demand.isThreePhase ? '3P+N' : '2P'} {demand.generalBreakerAmps} A
+                      </text>
+                      <text x="108" y="154" fill="#2563eb" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                        Cabecera General
+                      </text>
+
+                      {/* Sectional Boards RCD Summary */}
+                      <rect x="44" y="172" width="128" height="40" rx="4" fill="#eff6ff" stroke="#0284c7" strokeWidth="1.6" />
+                      <text x="108" y="188" fill="#0369a1" fontSize="9.5" fontWeight="black" textAnchor="middle">
+                        {sectionalBoards.length} Seccionales
+                      </text>
+                      <text x="108" y="202" fill="#0284c7" fontSize="8.5" fontWeight="bold" textAnchor="middle">
+                        ID 30 mA en c/ TS
+                      </text>
+
+                      {/* Grounding Rod Connection (PE) */}
+                      <line x1="108" y1="212" x2="108" y2="246" stroke="#16a34a" strokeWidth="2.5" strokeDasharray="3,2" />
+                      <rect x="44" y="246" width="128" height="30" rx="4" fill="#f0fdf4" stroke="#16a34a" strokeWidth="1.2" />
+                      <text x="108" y="259" fill="#15803d" fontSize="8.5" fontWeight="black" textAnchor="middle">
+                        PAT Jabalina 10 mm²
+                      </text>
+                      <text x="108" y="270" fill="#166534" fontSize="8" fontWeight="bold" textAnchor="middle">
+                        IRAM 2309 (R ≤ 10 Ω)
+                      </text>
+
+                      {/* Tablero Seccional Group Banners */}
+                      {multifilarBoardGroups.map((grp) => {
+                        const grpX = startX + grp.startIndex * circuitSpacing - 24;
+                        const grpW = Math.max(76, (grp.count - 1) * circuitSpacing + 74);
+                        const grpLabel = `${grp.boardCode}${grp.colorTag ? ` (${grp.colorTag})` : ''} · ${grp.dpmsWatts}W`;
+                        return (
+                          <g key={grp.boardCode + grp.startIndex}>
+                            <rect
+                              x={grpX}
+                              y="116"
+                              width={grpW}
+                              height="19"
+                              rx="3"
+                              fill={grp.boardCode === 'TCE Directo' ? '#fef2f2' : '#0f2b48'}
+                              stroke={grp.boardCode === 'TCE Directo' ? '#dc2626' : '#0f2b48'}
+                              strokeWidth="1"
+                            />
+                            <text
+                              x={grpX + grpW / 2}
+                              y="129"
+                              fill={grp.boardCode === 'TCE Directo' ? '#991b1b' : '#fbbf24'}
+                              fontSize="8.5"
+                              fontWeight="black"
+                              textAnchor="middle"
+                            >
+                              {grpLabel}
+                            </text>
+                          </g>
+                        );
+                      })}
+
+                      {/* Tapped Circuits grouped with TS badge & 1F/3F taps */}
+                      {orderedMultifilarCircuits.map((circ, idx) => {
+                        const posX = startX + idx * circuitSpacing;
+                        const CIRCUIT_COLORS_MAP: Record<string, string> = {
+                          IUG: '#ca8a04',
+                          TUG: '#16a34a',
+                          AA: '#0284c7',
+                          LAV: '#9333ea',
+                          TUE: '#ea580c',
+                          CUE: '#dc2626',
+                        };
+                        const color = CIRCUIT_COLORS_MAP[circ.t] || '#0f2b48';
+                        const bCode = circ.boardCode || 'TS1';
+                        const { phaseY, phaseName, phaseColor, isThreePhase } = getReportCircuitPhase(circ);
+                        const polesLabel = isThreePhase ? '4P' : '2P';
+
+                        return (
+                          <g key={circ.id}>
+                            {isThreePhase ? (
+                              <>
+                                <line x1={posX - 5} y1="28" x2={posX - 5} y2="152" stroke="#92400e" strokeWidth="2.2" />
+                                <circle cx={posX - 5} cy="28" r="4" fill="#92400e" stroke="white" strokeWidth="0.6" />
+                                <line x1={posX} y1="46" x2={posX} y2="152" stroke="#1e293b" strokeWidth="2.2" />
+                                <circle cx={posX} cy="46" r="4" fill="#1e293b" stroke="white" strokeWidth="0.6" />
+                                <line x1={posX + 5} y1="64" x2={posX + 5} y2="152" stroke="#6b21a8" strokeWidth="2.2" />
+                                <circle cx={posX + 5} cy="64" r="4" fill="#6b21a8" stroke="white" strokeWidth="0.6" />
+                                <line x1={posX + 12} y1="82" x2={posX + 12} y2="152" stroke="#0284c7" strokeWidth="2.2" />
+                                <circle cx={posX + 12} cy="82" r="3.8" fill="#0284c7" stroke="white" strokeWidth="0.6" />
+                                <line x1={posX + 20} y1="100" x2={posX + 20} y2="152" stroke="#16a34a" strokeWidth="2" strokeDasharray="3,2" />
+                                <circle cx={posX + 20} cy="100" r="3.6" fill="#16a34a" stroke="white" strokeWidth="0.6" />
+                              </>
+                            ) : (
+                              <>
+                                <line x1={posX} y1={phaseY} x2={posX} y2="152" stroke={phaseColor} strokeWidth="2.5" />
+                                <circle cx={posX} cy={phaseY} r="4.5" fill={phaseColor} stroke="white" strokeWidth="0.6" />
+                                <line x1={posX + 10} y1="82" x2={posX + 10} y2="152" stroke="#0284c7" strokeWidth="2.5" />
+                                <circle cx={posX + 10} cy="82" r="4" fill="#0284c7" stroke="white" strokeWidth="0.6" />
+                                <line x1={posX + 20} y1="100" x2={posX + 20} y2="152" stroke="#16a34a" strokeWidth="2" strokeDasharray="3,2" />
+                                <circle cx={posX + 20} cy="100" r="3.8" fill="#16a34a" stroke="white" strokeWidth="0.6" />
+                              </>
+                            )}
+
+                            {/* Circuit Breaker box */}
+                            <rect
+                              x={posX - 18}
+                              y="150"
+                              width="56"
+                              height="50"
+                              rx="4"
+                              fill="#ffffff"
+                              stroke={isThreePhase ? '#dc2626' : '#0f2b48'}
+                              strokeWidth="1.8"
+                            />
+                            <text x={posX + 10} y="165" fill="#0f2b48" fontSize="9.5" fontWeight="black" textAnchor="middle">
+                              {circ.id} · {bCode}
+                            </text>
+                            <text x={posX + 10} y="179" fill="#2563eb" fontSize="9" fontWeight="bold" textAnchor="middle">
+                              {polesLabel} {circ.B}A
+                            </text>
+                            <text x={posX + 10} y="193" fill={phaseColor} fontSize="8.5" fontWeight="extrabold" textAnchor="middle">
+                              {isThreePhase ? '3F R-S-T' : phaseName}
+                            </text>
+
+                            {/* Line down to Circuit summary card */}
+                            <line x1={posX + 10} y1="200" x2={posX + 10} y2="232" stroke={color} strokeWidth="3" />
+                            <circle cx={posX + 10} cy="246" r="15" fill={color} stroke="#0f2b48" strokeWidth="1" />
+                            <text x={posX + 10} y="250" fill="#ffffff" fontSize="10" fontWeight="black" textAnchor="middle">
+                              {circ.t}
+                            </text>
+
+                            {/* Circuit Info Card (>=8.5pt readable text) */}
+                            <g transform={`translate(${posX + 10}, 272)`}>
+                              <rect x="-46" y="-5" width="92" height="98" rx="6" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
+                              <text x="0" y="13" fill="#0f172a" fontSize="9.5" fontWeight="extrabold" textAnchor="middle">
+                                {circ.d.length > 12 ? circ.d.slice(0, 11) + '..' : circ.d}
+                              </text>
+                              <text x="0" y="29" fill="#475569" fontSize="9.5" textAnchor="middle">
+                                {circ.q}
+                              </text>
+                              <text x="0" y="46" fill="#0f172a" fontSize="9.5" fontWeight="bold" textAnchor="middle">
+                                {circ.s} mm² Cu
+                              </text>
+                              <text x="0" y="63" fill="#0f2b48" fontSize="9.5" fontWeight="black" textAnchor="middle">
+                                {circ.W}W ({circ.I.toFixed(1)}A)
+                              </text>
+                              <text x="0" y="80" fill="#2563eb" fontSize="9" fontWeight="bold" textAnchor="middle">
+                                ΔV: {circ.deltaV}%
+                              </text>
+                            </g>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="border-t border-slate-300 pt-2 flex items-center justify-between text-[10px] text-slate-500 font-medium">
+            <span>ElectroPlan AR · Software de Cálculo Eléctrico Ley 10281</span>
+            <span>Hoja 3 de 7 · Diagrama Multifilar y Balance de Fases (Sección 02B ERSeP)</span>
           </div>
         </section>
 
@@ -1081,7 +1619,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
                 <div className="text-right text-[11px] text-slate-700 font-mono">
                   <div><strong>Protocolo:</strong> ERSeP RG 11/2018</div>
                   <div><strong>Verificador:</strong> Cat. ERSeP</div>
-                  <div><strong>Hoja:</strong> 3 de 6</div>
+                  <div><strong>Hoja:</strong> 4 de 7</div>
                 </div>
               </div>
             </div>
@@ -1195,7 +1733,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
           {/* Footer */}
           <div className="border-t border-slate-300 pt-2 flex items-center justify-between text-[10px] text-slate-500 font-medium">
             <span>ElectroPlan AR · Software de Cálculo Eléctrico Ley 10281</span>
-            <span>Hoja 3 de 6 · Pruebas, Ensayos y Especificaciones (Secciones 03 y 04 ERSeP)</span>
+            <span>Hoja 4 de 7 · Pruebas, Ensayos y Especificaciones (Secciones 03 y 04 ERSeP)</span>
           </div>
         </section>
 
@@ -1225,7 +1763,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
                 <div className="text-right text-[11px] text-slate-700 font-mono">
                   <div><strong>Requisito:</strong> ERSeP Ley 10281</div>
                   <div><strong>Rubros:</strong> 5 Temas</div>
-                  <div><strong>Hoja:</strong> 4 de 6</div>
+                  <div><strong>Hoja:</strong> 5 de 7</div>
                 </div>
               </div>
             </div>
@@ -1350,7 +1888,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
           {/* Footer */}
           <div className="border-t border-slate-300 pt-2 flex items-center justify-between text-[10px] text-slate-500 font-medium">
             <span>ElectroPlan AR · Software de Cálculo Eléctrico Ley 10281</span>
-            <span>Hoja 4 de 6 · Registro Fotográfico (Sección 06 ERSeP)</span>
+            <span>Hoja 5 de 7 · Registro Fotográfico (Sección 06 ERSeP)</span>
           </div>
         </section>
 
@@ -1380,7 +1918,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
                 <div className="text-right text-[11px] text-slate-700 font-mono">
                   <div><strong>Rubro:</strong> Materiales Homologados</div>
                   <div><strong>Certificación:</strong> IRAM / IEC</div>
-                  <div><strong>Hoja:</strong> 5 de 6</div>
+                  <div><strong>Hoja:</strong> 6 de 7</div>
                 </div>
               </div>
             </div>
@@ -1423,7 +1961,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
           {/* Footer */}
           <div className="border-t border-slate-300 pt-2 flex items-center justify-between text-[10px] text-slate-500 font-medium">
             <span>ElectroPlan AR · Software de Cálculo Eléctrico Ley 10281</span>
-            <span>Hoja 5 de 6 · Listado de Materiales Homologado (Sección 07 ERSeP)</span>
+            <span>Hoja 6 de 7 · Listado de Materiales Homologado (Sección 07 ERSeP)</span>
           </div>
         </section>
 
@@ -1453,7 +1991,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
                 <div className="text-right text-[11px] text-slate-700 font-mono">
                   <div><strong>Ente:</strong> ERSeP Córdoba</div>
                   <div><strong>Efecto:</strong> Pedido Conexión</div>
-                  <div><strong>Hoja:</strong> 6 de 6</div>
+                  <div><strong>Hoja:</strong> 7 de 7</div>
                 </div>
               </div>
             </div>
@@ -1567,7 +2105,7 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
           {/* Footer */}
           <div className="border-t border-slate-300 pt-2 flex items-center justify-between text-[10px] text-slate-500 font-medium">
             <span>ElectroPlan AR · Software de Cálculo Eléctrico Ley 10281</span>
-            <span>Hoja 6 de 6 · Certificado de Aptitud y Declaración Jurada (Sección 08 ERSeP)</span>
+            <span>Hoja 7 de 7 · Certificado de Aptitud y Declaración Jurada (Sección 08 ERSeP)</span>
           </div>
         </section>
 

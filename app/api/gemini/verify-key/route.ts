@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
     // Simple test call with flash model
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-4-hydrogen',
       contents: 'Respond ok',
     });
 

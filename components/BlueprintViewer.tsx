@@ -29,6 +29,7 @@ import {
   ComponentMarker,
   FloorData,
 } from '@/lib/types';
+import { safeFetchJson } from '@/lib/safe-json';
 
 interface BlueprintViewerProps {
   floors: FloorData[];
@@ -55,8 +56,11 @@ export default function BlueprintViewer({
     'pan' | 'calibrate' | 'measure-dist' | 'measure-area' | 'add-component' | 'zoom-window'
   >('pan');
 
-  // Selected Component Type to add
+  // Selected Component Type and Target Board to add
   const [selectedCompType, setSelectedCompType] = useState<ComponentMarker['type']>('techo');
+  const [selectedFloorIdx, setSelectedFloorIdx] = useState<number>(0);
+  const [syncedMarkerIds, setSyncedMarkerIds] = useState<Record<string, boolean>>({});
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
   // Zoom and Pan Transform
   const [transform, setTransform] = useState<{ x: number; y: number; scale: number }>({
@@ -362,14 +366,15 @@ export default function BlueprintViewer({
       ctx.arc(m.x, m.y, radius, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = syncedMarkerIds[m.id] ? '#22c55e' : '#ffffff';
       ctx.lineWidth = 1.5 / transform.scale;
       ctx.stroke();
 
       ctx.fillStyle = '#ffffff';
       ctx.font = `bold ${Math.max(10, 11 / transform.scale)}px sans-serif`;
       ctx.textAlign = 'center';
-      ctx.fillText(m.label, m.x, m.y + 4 / transform.scale);
+      const displayLbl = m.boardCode ? `${m.label} [${m.boardCode}]` : m.label;
+      ctx.fillText(displayLbl, m.x, m.y + 4 / transform.scale);
     });
 
     ctx.restore();
@@ -400,6 +405,7 @@ export default function BlueprintViewer({
     activeTool,
     zoomWinStart,
     zoomWinCurrent,
+    syncedMarkerIds,
   ]);
 
   useEffect(() => {
@@ -474,16 +480,60 @@ export default function BlueprintViewer({
         tablero: 'TG/TS',
         jabalina: 'PAT',
       };
+      const safeFloorIdx = Math.min(selectedFloorIdx, Math.max(0, floors.length - 1));
+      const targetFloor = floors[safeFloorIdx];
+      const targetCode =
+        targetFloor?.boardCode?.trim().toUpperCase() || `TS${safeFloorIdx + 1}`;
       const newMarker: ComponentMarker = {
         id: Math.random().toString(36).substring(2, 9),
         x: imgPos.x,
         y: imgPos.y,
         type: selectedCompType,
         label: labels[selectedCompType] || 'Boca',
-        floorIndex: activePageIndex,
+        floorIndex: safeFloorIdx,
+        boardCode: targetCode,
       };
       setMarkers((prev) => [...prev, newMarker]);
+      setSyncNotice(null);
     }
+  };
+
+  // Sync newly placed markers on blueprint canvas into floors (updates Unifilar & Multifilar)
+  const handleSyncMarkersToFloors = () => {
+    const unsynced = markers.filter((m) => !syncedMarkerIds[m.id]);
+    if (unsynced.length === 0 || floors.length === 0) return;
+
+    const updatedFloors = floors.map((f) => ({ ...f }));
+    const newSynced = { ...syncedMarkerIds };
+
+    unsynced.forEach((m) => {
+      const fIdx = Math.min(Math.max(0, m.floorIndex), updatedFloors.length - 1);
+      const target = updatedFloors[fIdx];
+      if (!target) return;
+      if (m.type === 'techo') {
+        target.techo = (target.techo || 0) + 1;
+        target.modPuntos = (target.modPuntos || 0) + 1;
+        target.cajasOct = (target.cajasOct || 0) + 1;
+        target.tapas = (target.tapas || 0) + 1;
+      } else if (m.type === 'pared') {
+        target.pared = (target.pared || 0) + 1;
+        target.modPuntos = (target.modPuntos || 0) + 1;
+        target.tapas = (target.tapas || 0) + 1;
+      } else if (m.type === 'tomas') {
+        target.tomas = (target.tomas || 0) + 1;
+        target.modTomas = (target.modTomas || 0) + 1;
+        target.tapas = (target.tapas || 0) + 1;
+      } else if (m.type === 'aa') {
+        target.aa = (target.aa || 0) + 1;
+      } else if (m.type === 'lav') {
+        target.lav = (target.lav || 0) + 1;
+      }
+      newSynced[m.id] = true;
+    });
+
+    setSyncedMarkerIds(newSynced);
+    onUpdateFloors(updatedFloors);
+    setSyncNotice(`Se aplicaron ${unsynced.length} carga(s) marcada(s). Unifilar y Multifilar actualizados.`);
   };
 
   // Canvas Mouse Move
@@ -624,22 +674,66 @@ export default function BlueprintViewer({
       return;
     }
 
+    let customApiKey = typeof window !== 'undefined' ? localStorage.getItem('electroplan_custom_api_key') : null;
+
+    if (!customApiKey) {
+      const userKey = prompt(
+        '🔑 Clave API Key Personal Requerida:\n\n' +
+        'Cada cliente utiliza su propia clave API Key de Google Gemini para procesar sus planos de forma autónoma.\n\n' +
+        'Podés obtener tu clave gratuita en: https://aistudio.google.com/app/apikey\n\n' +
+        'Ingresá tu API Key de Gemini a continuación (o configurala en la Pestaña 6):'
+      );
+      if (!userKey || !userKey.trim()) {
+        alert('Análisis cancelado. Necesitás ingresar tu propia clave API Key de Gemini para utilizar las funciones de Inteligencia Artificial.');
+        return;
+      }
+      customApiKey = userKey.trim();
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('electroplan_custom_api_key', customApiKey);
+      }
+    }
+
     setIsAnalyzing(true);
     setAnalysisProgress(15);
     setAnalysisStatusText('Preparando plano y datos de escala calibrada...');
 
     try {
-      // Get base64 string without data header
-      const imagesBase64 = uploadedFiles.map((f) => f.dataUrl.split(',')[1]);
+      // Normalize uploaded images (PNG/JPG/PDF renders) to compressed JPEG max 1600px to avoid 413 HTML proxy errors
+      const normalizeToJpegBase64 = (dataUrl: string): Promise<string> =>
+        new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            const maxDim = 1600;
+            const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              const out = canvas.toDataURL('image/jpeg', 0.84);
+              resolve(out.split(',')[1] || '');
+            } else {
+              resolve(dataUrl.split(',')[1] || '');
+            }
+          };
+          img.onerror = () => resolve(dataUrl.split(',')[1] || '');
+          img.src = dataUrl;
+        });
+
+      const imagesBase64 = await Promise.all(uploadedFiles.slice(0, 4).map((f) => normalizeToJpegBase64(f.dataUrl)));
 
       setAnalysisProgress(45);
-      setAnalysisStatusText('Enviando imagen a Gemini 3.8 Flash para visión y medición...');
+      setAnalysisStatusText('Enviando imagen a Gemini con tu clave API Key personal...');
 
-      const customApiKey = typeof window !== 'undefined' ? localStorage.getItem('electroplan_custom_api_key') : null;
-      const reqHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (customApiKey) reqHeaders['x-gemini-api-key'] = customApiKey;
+      const reqHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-gemini-api-key': customApiKey,
+      };
 
-      const response = await fetch('/api/gemini/analyze-blueprint', {
+      const result = await safeFetchJson('/api/gemini/analyze-blueprint', {
         method: 'POST',
         headers: reqHeaders,
         body: JSON.stringify({
@@ -649,10 +743,9 @@ export default function BlueprintViewer({
         }),
       });
 
-      const data = await response.json();
-
-      if (!response.ok || data.error) {
-        throw new Error(data.error || `Error del servidor (${response.status})`);
+      const data = result.data;
+      if (!result.ok || result.error || !data) {
+        throw new Error(result.error || `Error del servidor (${result.status})`);
       }
 
       setAnalysisProgress(80);
@@ -662,7 +755,11 @@ export default function BlueprintViewer({
         // Sanitize and ensure each floor has valid id and numeric types
         const sanitizedFloors: FloorData[] = data.floors.map((f: any, idx: number) => ({
           id: f.id || `f_ai_${idx + 1}_${Math.random().toString(36).substring(2, 7)}`,
-          name: f.name || `Planta ${idx + 1}`,
+          name: f.name || `Sector ${idx + 1}`,
+          boardCode: (f.boardCode || `TS${idx + 1}`).toUpperCase(),
+          colorTag: f.colorTag || undefined,
+          feederLengthM: Number(f.feederLengthM) || 12 + idx * 6,
+          feederPhases: 'auto',
           techo: Number(f.techo) || 0,
           pared: Number(f.pared) || 0,
           tomas: Number(f.tomas) || 0,
@@ -688,10 +785,10 @@ export default function BlueprintViewer({
         throw new Error('La IA no devolvió un formato válido de plantas/floors.');
       }
     } catch (err: any) {
-      console.error('AI Analysis failed:', err);
+      console.warn('AI Analysis failed:', err?.message || err);
       setAnalysisProgress(0);
       setAnalysisStatusText('Error en el proceso de análisis.');
-      alert(`Error en análisis de IA: ${err.message || 'Verifique la clave API o la imagen del plano cargada.'}`);
+      alert(`Error en análisis de IA: ${err?.message || 'Verifique la clave API o la imagen del plano cargada.'}`);
     } finally {
       setTimeout(() => {
         setIsAnalyzing(false);
@@ -855,8 +952,21 @@ export default function BlueprintViewer({
 
         {/* Sub-toolbar for Component Selector if add-component is active */}
         {activeTool === 'add-component' && (
-          <div className="absolute top-16 left-3 z-10 flex items-center gap-1 p-1.5 bg-white/95 backdrop-blur border border-slate-300 rounded-lg shadow-md no-print">
-            <span className="text-[11px] font-bold text-slate-700 px-1">Componente:</span>
+          <div className="absolute top-16 left-3 z-10 flex flex-wrap items-center gap-1 p-1.5 bg-white/95 backdrop-blur border border-slate-300 rounded-lg shadow-md no-print max-w-[92%]">
+            <span className="text-[11px] font-bold text-slate-700 px-1">Tablero:</span>
+            <select
+              value={Math.min(selectedFloorIdx, Math.max(0, floors.length - 1))}
+              onChange={(e) => setSelectedFloorIdx(parseInt(e.target.value) || 0)}
+              className="px-2 py-1 rounded text-[11px] font-bold bg-[#0f2b48] text-amber-300 border border-slate-700"
+            >
+              {floors.map((f, idx) => (
+                <option key={f.id || idx} value={idx}>
+                  {f.boardCode || `TS${idx + 1}`} — {f.name}
+                </option>
+              ))}
+            </select>
+            <div className="w-px h-4 bg-slate-300 mx-0.5" />
+            <span className="text-[11px] font-bold text-slate-700 px-1">Carga:</span>
             {[
               { id: 'techo', label: '💡 Techo' },
               { id: 'pared', label: '🏮 Aplique' },
@@ -878,6 +988,50 @@ export default function BlueprintViewer({
                 {comp.label}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Marker Sync Bar when markers have been placed on the blueprint */}
+        {(markers.length > 0 || syncNotice) && (
+          <div className="absolute bottom-3 right-3 z-10 flex flex-wrap items-center gap-2 px-3 py-1.5 bg-white/95 backdrop-blur border border-slate-300 rounded-lg text-xs text-slate-900 shadow-md no-print">
+            {syncNotice && (
+              <span className="text-emerald-800 font-bold flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                {syncNotice}
+              </span>
+            )}
+            {markers.filter((m) => !syncedMarkerIds[m.id]).length > 0 && (
+              <button
+                onClick={handleSyncMarkersToFloors}
+                className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded text-[11px] flex items-center gap-1 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Aplicar {markers.filter((m) => !syncedMarkerIds[m.id]).length} Carga(s) a Tableros y Diagramas
+              </button>
+            )}
+            {markers.length > 0 && (
+              <button
+                onClick={() => {
+                  setMarkers((prev) => prev.slice(0, -1));
+                }}
+                className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded text-[11px] border border-slate-300"
+              >
+                Deshacer último
+              </button>
+            )}
+            {markers.length > 0 && (
+              <button
+                onClick={() => {
+                  setMarkers([]);
+                  setSyncedMarkerIds({});
+                  setSyncNotice(null);
+                }}
+                title="Limpiar marcadores visuales"
+                className="p-1 text-red-600 hover:bg-red-50 rounded border border-red-200"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         )}
 

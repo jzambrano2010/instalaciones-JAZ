@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
+import { extractJsonFromModelText } from '@/lib/safe-json';
 
 export async function POST(req: NextRequest) {
   try {
@@ -10,7 +11,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            'No se encontró clave GEMINI_API_KEY. Ingresá tu clave en la Pestaña 6 (Licencias y Configuración) o configurá tu clave API.',
+            'Requisito de Clave Personal: Debés ingresar tu propia clave API Key de Google Gemini en la Pestaña 6 (Licencias y Configuración) para analizar el plano con IA.',
         },
         { status: 400 }
       );
@@ -25,7 +26,12 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const { images, hint, pixelsPerMeter } = await req.json();
+    const body = await req.json().catch(() => ({}));
+    const { images, hint, pixelsPerMeter } = (body || {}) as {
+      images?: string[];
+      hint?: string;
+      pixelsPerMeter?: number;
+    };
 
     if (!images || !Array.isArray(images) || images.length === 0) {
       return NextResponse.json({ error: 'No se enviaron imágenes del plano' }, { status: 400 });
@@ -48,28 +54,31 @@ Información adicional de escala:
 ${pixelsPerMeter ? `Escala calibrada en el visor: ${pixelsPerMeter.toFixed(2)} píxeles por metro.` : 'Escala no calibrada manualmente, estimar dimensiones estándar en base a cotas o aperturas (puertas ~0.8m - 0.9m).'}
 Indicaciones del usuario: ${hint || 'Ninguna'}.
 
-Tu objetivo es identificar de manera precisa por cada planta/piso (Planta Baja, Planta Alta, Quincho, etc.):
-1. Nombre de la planta ("Planta Baja", "Planta Alta", etc.)
-2. Cantidad de bocas de luz en techo (centros IUG) - Mínimo 1 si hay ambientes dibujados.
-3. Cantidad de bocas de luz en pared (apliques IUG)
-4. Cantidad de tomacorrientes generales (TUG - cajas rectangulares 10x5) - Mínimo estimar según ambientes.
-5. Cantidad de tomas de uso especial para Aire Acondicionado (AAc)
-6. Cantidad de tomas para Lavarropas / Lavadero (LAV)
-7. Otras cargas especiales (TUE, termoeléctrico, bomba de agua, etc.) y su potencia en W.
-8. Cantidad de módulos de llaves de punto
-9. Cantidad de módulos de tomacorrientes
-10. Cantidad de tapas para cajas rectangulares y octogonales
-11. Cantidad de cajas octogonales de derivación y paso
-12. Superficie cubierta en m² para esa planta (Estimación realista en m², ej: 65.5).
-13. Largo estimado de cañerías en metros para esa planta.
-14. Una breve nota técnica con observaciones del plano.
+Tu objetivo es identificar de manera precisa por cada planta, sector o Tablero Seccional (TS1, TS2, TS3, TS4, etc. alimentados desde un Tablero Central TCE):
+1. Nombre del sector o planta (ej. "Planta Baja - TS1", "Planta Alta - TS2", "Quincho - TS3", "Sector 4 - TS4").
+2. Código del Tablero Seccional si figura en el plano ("TS1", "TS2", "TS3", "TS4", etc.). Si no figura, asignar correlativamente "TS1", "TS2", etc.
+3. Color identificador en el plano (colorTag) si el plano diferencia cada tablero seccional, ambiente o tendido mediante colores (ej. "Rojo", "Azul", "Verde", "Amarillo", "Naranja", "Violeta", "Celeste"). Buscá referencias/leyendas de colores o trazos de colores en el dibujo para agrupar exactamente las bocas de cada TS según su color.
+4. Distancia estimada en metros desde el Tablero Central (TCE) hasta dicho Tablero Seccional (ej. 12, 18, 25).
+5. Cantidad de bocas de luz en techo (centros IUG) pertenecientes a ese tablero/color - Mínimo 1 si hay ambientes dibujados.
+6. Cantidad de bocas de luz en pared (apliques IUG) pertenecientes a ese tablero/color.
+7. Cantidad de tomacorrientes generales (TUG - cajas rectangulares 10x5) pertenecientes a ese tablero/color.
+8. Cantidad de tomas de uso especial para Aire Acondicionado (AAc) pertenecientes a ese tablero/color.
+9. Cantidad de tomas para Lavarropas / Lavadero (LAV) pertenecientes a ese tablero/color.
+10. Otras cargas especiales (TUE, termoeléctrico, bomba de agua, etc.) y su potencia en W.
+11. Cantidad de módulos de llaves de punto.
+12. Cantidad de módulos de tomacorrientes.
+13. Cantidad de tapas para cajas rectangulares y octogonales.
+14. Cantidad de cajas octogonales de derivación y paso.
+15. Superficie cubierta en m² para esa planta/sector (Estimación realista en m², ej: 65.5).
+16. Largo estimado de cañerías en metros para esa planta/sector.
+17. Una breve nota técnica con observaciones del plano (incluyendo qué color corresponde a cada tablero).
 
-IMPORTANTE: Estimá valores mayores a 0 para bocas de luz (techo), tomacorrientes y superficie medida m², basados en la distribución visible del plano.
+IMPORTANTE: Si el plano distingue múltiples tableros seccionales (TS1, TS2, TS3, TS4) por zonas o POR COLORES alimentados desde un TCE, devolvé un objeto separado en 'floors' para cada TS respetando exactamente las bocas de su color, su código 'boardCode' y su 'colorTag'. Estimá valores mayores a 0 para bocas de luz (techo), tomacorrientes y superficie medida m².
 
 Devolvé la respuesta estrictamente en formato JSON que cumpla con el esquema.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-4-hydrogen',
       contents: [
         {
           parts: [
@@ -89,6 +98,9 @@ Devolvé la respuesta estrictamente en formato JSON que cumpla con el esquema.`;
                 type: Type.OBJECT,
                 properties: {
                   name: { type: Type.STRING },
+                  boardCode: { type: Type.STRING },
+                  colorTag: { type: Type.STRING },
+                  feederLengthM: { type: Type.NUMBER },
                   techo: { type: Type.INTEGER },
                   pared: { type: Type.INTEGER },
                   tomas: { type: Type.INTEGER },
@@ -121,8 +133,13 @@ Devolvé la respuesta estrictamente en formato JSON que cumpla con el esquema.`;
       },
     });
 
-    const jsonStr = (response.text || '{}').trim();
-    const data = JSON.parse(jsonStr);
+    const data = extractJsonFromModelText<{ floors?: any[] }>(response.text, { floors: [] });
+    if (!data || !Array.isArray(data.floors) || data.floors.length === 0) {
+      return NextResponse.json(
+        { error: 'La IA no devolvió una estructura JSON válida para el plano.' },
+        { status: 502 }
+      );
+    }
 
     return NextResponse.json(data);
   } catch (err: any) {
