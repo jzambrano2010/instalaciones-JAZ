@@ -23,12 +23,29 @@ import {
   KeyRound,
   RotateCcw,
   Eye,
+  LogIn,
+  Cloud,
+  CloudOff,
+  Save,
+  Trash2,
+  FolderOpen,
+  UserCheck,
+  LogOut,
+  Lock,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 
 import Link from 'next/link';
+import { Session } from '@supabase/supabase-js';
 
 import { FloorData, TechnicalParams } from '@/lib/types';
 import { safeJsonParse } from '@/lib/safe-json';
+import {
+  getSupabaseBrowserClient,
+  CloudProjectRecord,
+  isSchemaMissingError,
+} from '@/lib/supabase';
 import BlueprintViewer from '@/components/BlueprintViewer';
 import ProjectData from '@/components/ProjectData';
 import UnifilarDiagram from '@/components/UnifilarDiagram';
@@ -37,6 +54,7 @@ import LoadReport from '@/components/LoadReport';
 import LicenseTab from '@/components/LicenseTab';
 import PrintHeader from '@/components/PrintHeader';
 import AIConsultant from '@/components/AIConsultant';
+import AuthPanel from '@/components/AuthPanel';
 
 const DEFAULT_FLOORS: FloorData[] = [
   {
@@ -188,7 +206,25 @@ export default function Home() {
   const [showUsageModal, setShowUsageModal] = useState<boolean>(false);
   const [showNormativeModal, setShowNormativeModal] = useState<boolean>(false);
   const [showResetModal, setShowResetModal] = useState<boolean>(false);
+  const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
+  const [showPasswordRecoveryModal, setShowPasswordRecoveryModal] = useState<boolean>(false);
+  const [newRecoveryPassword, setNewRecoveryPassword] = useState<string>('');
+  const [confirmRecoveryPassword, setConfirmRecoveryPassword] = useState<string>('');
+  const [recoveryLoading, setRecoveryLoading] = useState<boolean>(false);
+  const [recoveryFeedback, setRecoveryFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
   const [activePrintTab, setActivePrintTab] = useState<string | null>(null);
+
+  // Supabase Auth & Cloud Projects State
+  const [session, setSession] = useState<Session | null>(null);
+  const [cloudProjects, setCloudProjects] = useState<CloudProjectRecord[]>([]);
+  const [activeCloudProjectId, setActiveCloudProjectId] = useState<string | null>(null);
+  const [cloudProjectName, setCloudProjectName] = useState<string>('Proyecto Principal');
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<string | null>(null);
+  const [cloudSchemaReady, setCloudSchemaReady] = useState<boolean>(true);
+  const [isSavingCloud, setIsSavingCloud] = useState<boolean>(false);
 
   // Reset / Start fresh project state
   const handleConfirmReset = () => {
@@ -249,6 +285,273 @@ export default function Home() {
     }
   }, [floors, params, mounted]);
 
+  // Listen to Supabase Auth session & PASSWORD_RECOVERY redirect event
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    const hasRecoveryInUrl =
+      typeof window !== 'undefined' &&
+      (window.location.hash.includes('type=recovery') ||
+        window.location.search.includes('type=recovery'));
+
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session ?? null);
+      if (hasRecoveryInUrl && data.session) {
+        setShowPasswordRecoveryModal(true);
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      setSession(nextSession ?? null);
+      if (event === 'PASSWORD_RECOVERY') {
+        setRecoveryFeedback(null);
+        setNewRecoveryPassword('');
+        setConfirmRecoveryPassword('');
+        setShowPasswordRecoveryModal(true);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleUpdateRecoveredPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecoveryFeedback(null);
+
+    if (newRecoveryPassword.length < 6) {
+      setRecoveryFeedback({
+        type: 'error',
+        text: 'La nueva contraseña debe tener al menos 6 caracteres.',
+      });
+      return;
+    }
+    if (newRecoveryPassword !== confirmRecoveryPassword) {
+      setRecoveryFeedback({
+        type: 'error',
+        text: 'Las contraseñas no coinciden. Verificá ambos campos.',
+      });
+      return;
+    }
+
+    setRecoveryLoading(true);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error } = await supabase.auth.updateUser({ password: newRecoveryPassword });
+      if (error) {
+        setRecoveryFeedback({
+          type: 'error',
+          text: error.message || 'No se pudo actualizar la contraseña.',
+        });
+        return;
+      }
+      setRecoveryFeedback({
+        type: 'success',
+        text: '¡Contraseña actualizada correctamente! Ya podés seguir usando tu cuenta.',
+      });
+      if (typeof window !== 'undefined' && window.location.hash.includes('type=recovery')) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+      setTimeout(() => {
+        setShowPasswordRecoveryModal(false);
+        setNewRecoveryPassword('');
+        setConfirmRecoveryPassword('');
+        setRecoveryFeedback(null);
+      }, 1400);
+    } catch (err: any) {
+      setRecoveryFeedback({
+        type: 'error',
+        text: err?.message || 'Error inesperado al cambiar la contraseña.',
+      });
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
+  // Load saved cloud projects when user signs in
+  const loadCloudProjects = React.useCallback(async (userId: string, autoLoadLatest = false) => {
+    const supabase = getSupabaseBrowserClient();
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      if (isSchemaMissingError(error)) {
+        setCloudSchemaReady(false);
+      }
+      return;
+    }
+
+    setCloudSchemaReady(true);
+    const list = (data || []) as CloudProjectRecord[];
+    setCloudProjects(list);
+
+    if (autoLoadLatest && list.length > 0) {
+      const latest = list[0];
+      setActiveCloudProjectId(latest.id);
+      setCloudProjectName(latest.name || 'Proyecto Principal');
+      if (Array.isArray(latest.floors) && latest.floors.length > 0) {
+        setFloors(latest.floors);
+      }
+      if (latest.params && typeof latest.params === 'object') {
+        setParams(latest.params);
+      }
+      setResetKey((prev) => prev + 1);
+      setCloudSyncStatus(`Proyecto "${latest.name}" cargado desde Supabase.`);
+    }
+  }, []);
+
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId) {
+      const timer = setTimeout(() => {
+        setCloudProjects([]);
+        setActiveCloudProjectId(null);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+    const timer = setTimeout(() => {
+      loadCloudProjects(userId, true);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [session?.user?.id, loadCloudProjects]);
+
+  // Save current project to Supabase DB
+  const handleSaveToCloud = async (asNew = false) => {
+    const user = session?.user;
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+    setIsSavingCloud(true);
+    setCloudSyncStatus(null);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const budgetRaw =
+        typeof window !== 'undefined' ? localStorage.getItem('electroplan_budget_overrides') : null;
+      const budgetOverrides = safeJsonParse<Record<string, unknown>>(budgetRaw, {});
+      const projectTitle =
+        cloudProjectName.trim() ||
+        (params.ownerName ? `Obra ${params.ownerName}` : 'Proyecto Eléctrico');
+      const nowIso = new Date().toISOString();
+
+      if (!asNew && activeCloudProjectId) {
+        const { error } = await supabase
+          .from('projects')
+          .update({
+            name: projectTitle,
+            params,
+            floors,
+            budget_overrides: budgetOverrides,
+            updated_at: nowIso,
+          })
+          .eq('id', activeCloudProjectId)
+          .eq('user_id', user.id);
+
+        if (error) {
+          if (isSchemaMissingError(error)) {
+            setCloudSchemaReady(false);
+            setCloudSyncStatus('Falta crear las tablas SQL en Supabase (ver Pestaña 6 · Licencias).');
+          } else {
+            setCloudSyncStatus('❌ Error guardando: ' + error.message);
+          }
+          return;
+        }
+        setCloudSyncStatus(`✅ Proyecto "${projectTitle}" actualizado en Supabase.`);
+      } else {
+        const { data: inserted, error } = await supabase
+          .from('projects')
+          .insert({
+            user_id: user.id,
+            name: projectTitle,
+            params,
+            floors,
+            budget_overrides: budgetOverrides,
+            updated_at: nowIso,
+          })
+          .select('*')
+          .single();
+
+        if (error) {
+          if (isSchemaMissingError(error)) {
+            setCloudSchemaReady(false);
+            setCloudSyncStatus('Falta crear las tablas SQL en Supabase (ver Pestaña 6 · Licencias).');
+          } else {
+            setCloudSyncStatus('❌ Error guardando: ' + error.message);
+          }
+          return;
+        }
+        if (inserted) {
+          setActiveCloudProjectId(inserted.id);
+          setCloudSyncStatus(`✅ Nuevo proyecto "${projectTitle}" guardado en Supabase.`);
+        }
+      }
+
+      await loadCloudProjects(user.id, false);
+    } finally {
+      setIsSavingCloud(false);
+    }
+  };
+
+  // Auto-sync active cloud project changes (debounced 2s)
+  useEffect(() => {
+    if (!mounted || !session?.user?.id || !activeCloudProjectId || !cloudSchemaReady) return;
+    const userId = session.user.id;
+    const timer = setTimeout(async () => {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const budgetRaw =
+          typeof window !== 'undefined' ? localStorage.getItem('electroplan_budget_overrides') : null;
+        const budgetOverrides = safeJsonParse<Record<string, unknown>>(budgetRaw, {});
+        await supabase
+          .from('projects')
+          .update({
+            params,
+            floors,
+            budget_overrides: budgetOverrides,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', activeCloudProjectId)
+          .eq('user_id', userId);
+      } catch {
+        // Silent background sync
+      }
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [floors, params, mounted, session?.user?.id, activeCloudProjectId, cloudSchemaReady]);
+
+  const handleLoadCloudProject = (proj: CloudProjectRecord) => {
+    setActiveCloudProjectId(proj.id);
+    setCloudProjectName(proj.name || 'Proyecto Principal');
+    if (Array.isArray(proj.floors) && proj.floors.length > 0) setFloors(proj.floors);
+    if (proj.params && typeof proj.params === 'object') setParams(proj.params);
+    if (proj.budget_overrides && typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('electroplan_budget_overrides', JSON.stringify(proj.budget_overrides));
+      } catch {
+        // ignore
+      }
+    }
+    setResetKey((prev) => prev + 1);
+    setCloudSyncStatus(`✅ Proyecto "${proj.name}" cargado en pantalla.`);
+  };
+
+  const handleDeleteCloudProject = async (projectId: string) => {
+    if (!session?.user?.id) return;
+    const supabase = getSupabaseBrowserClient();
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', projectId)
+      .eq('user_id', session.user.id);
+    if (!error) {
+      if (activeCloudProjectId === projectId) setActiveCloudProjectId(null);
+      await loadCloudProjects(session.user.id, false);
+      setCloudSyncStatus('Proyecto eliminado de Supabase.');
+    }
+  };
+
   // Handle Tab Printing in A4
   const handlePrintTab = (tabId: string) => {
     setActivePrintTab(tabId);
@@ -262,7 +565,7 @@ export default function Home() {
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col selection:bg-blue-600 selection:text-white">
       {/* 1. Top Bar Contract (Brand, Nav links, Action buttons) */}
       <header className="border-b-2 border-[#0f2b48] bg-slate-100 text-slate-900 sticky top-0 z-40 no-print shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex items-center justify-between gap-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4">
           {/* Zone 1: Single element brand wordmark */}
           <div className="flex items-center gap-3 shrink-0">
             <div className="w-9 h-9 rounded-xl bg-amber-500 flex items-center justify-center text-slate-950 shadow-md">
@@ -296,7 +599,7 @@ export default function Home() {
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                  className={`px-2.5 py-1.5 text-xs font-bold rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
                     activeTab === tab.id
                       ? 'bg-[#0f2b48] text-white shadow-sm'
                       : 'text-slate-800 hover:text-[#0f2b48] hover:bg-slate-300/60'
@@ -309,22 +612,45 @@ export default function Home() {
             })}
           </nav>
 
-          {/* Zone 3: Action buttons (Guía de Uso & Normas Contempladas) */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Zone 3: Action buttons (Guía, Normas & Cuenta Supabase) */}
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               onClick={() => setShowUsageModal(true)}
-              className="px-3 py-1.5 bg-white hover:bg-slate-200 border border-[#0f2b48] text-[#0f2b48] text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs"
+              title="Guía de Uso"
+              className="px-2.5 py-1.5 bg-white hover:bg-slate-200 border border-[#0f2b48] text-[#0f2b48] text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs"
             >
               <HelpCircle className="w-4 h-4 text-blue-700" />
-              Guía de Uso
+              <span className="hidden xl:inline">Guía de Uso</span>
             </button>
 
             <button
               onClick={() => setShowNormativeModal(true)}
-              className="px-3 py-1.5 bg-white hover:bg-slate-200 border border-[#0f2b48] text-[#0f2b48] text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs"
+              title="Normas Contempladas"
+              className="px-2.5 py-1.5 bg-white hover:bg-slate-200 border border-[#0f2b48] text-[#0f2b48] text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs"
             >
               <BookOpen className="w-4 h-4 text-amber-700" />
-              Normas Contempladas
+              <span className="hidden xl:inline">Normas</span>
+            </button>
+
+            <button
+              onClick={() => setShowAuthModal(true)}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 shadow-xs ${
+                session?.user
+                  ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                  : 'bg-[#0f2b48] hover:bg-slate-800 text-white'
+              }`}
+            >
+              {session?.user ? (
+                <>
+                  <Cloud className="w-3.5 h-3.5" />
+                  <span>Cuenta</span>
+                </>
+              ) : (
+                <>
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Ingresar</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -500,7 +826,13 @@ export default function Home() {
             onPrintTab={handlePrintTab}
           />
           <div className="mt-3">
-            <LicenseTab key={resetKey} />
+            <LicenseTab
+              key={resetKey}
+              session={session}
+              onUserUpdated={() => {
+                if (session?.user?.id) loadCloudProjects(session.user.id, false);
+              }}
+            />
           </div>
         </div>
       </main>
@@ -736,6 +1068,285 @@ export default function Home() {
                 Sí, Reiniciar Proyecto
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. MODAL 4: CUENTA SUPABASE Y PROYECTOS EN LA NUBE */}
+      {showAuthModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 no-print">
+          <div className="bg-white border-2 border-[#0f2b48] rounded-xl p-6 max-w-xl w-full shadow-2xl max-h-[88vh] overflow-y-auto space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <h3 className="text-base font-extrabold text-[#0f2b48] flex items-center gap-2">
+                {session?.user ? (
+                  <UserCheck className="w-5 h-5 text-emerald-700" />
+                ) : (
+                  <LogIn className="w-5 h-5 text-blue-800" />
+                )}
+                {session?.user
+                  ? 'Mi Cuenta y Proyectos en Supabase'
+                  : 'Registro e Inicio de Sesión (Supabase Auth)'}
+              </h3>
+              <button
+                onClick={() => setShowAuthModal(false)}
+                className="p-1 text-slate-500 hover:text-slate-900 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {!session?.user ? (
+              <AuthPanel
+                compact
+                onAuthSuccess={() => {
+                  setTimeout(() => setShowAuthModal(false), 700);
+                }}
+              />
+            ) : (
+              <div className="space-y-4 text-xs">
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="font-bold text-emerald-950">
+                      {session.user.user_metadata?.full_name || session.user.email}
+                    </div>
+                    <div className="text-[11px] text-emerald-800 font-mono">
+                      {session.user.email}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setShowAuthModal(false);
+                        setActiveTab('f');
+                      }}
+                      className="px-3 py-1.5 bg-purple-800 hover:bg-purple-900 text-white font-bold rounded-lg"
+                    >
+                      Ver Licencia
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowAuthModal(false);
+                        setRecoveryFeedback(null);
+                        setNewRecoveryPassword('');
+                        setConfirmRecoveryPassword('');
+                        setShowPasswordRecoveryModal(true);
+                      }}
+                      className="px-3 py-1.5 bg-white border border-slate-300 text-slate-800 hover:bg-slate-100 font-bold rounded-lg flex items-center gap-1"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                      Cambiar Clave
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await getSupabaseBrowserClient().auth.signOut();
+                        setShowAuthModal(false);
+                      }}
+                      className="px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 font-bold rounded-lg flex items-center gap-1"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      Salir
+                    </button>
+                  </div>
+                </div>
+
+                {!cloudSchemaReady && (
+                  <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 text-amber-950 flex items-start gap-2">
+                    <CloudOff className="w-4 h-4 shrink-0 mt-0.5 text-amber-700" />
+                    <div>
+                      <p className="font-bold">Tablas SQL pendientes en Supabase</p>
+                      <p className="text-[11px] mt-0.5">
+                        Andá a la pestaña <strong>6 · Licencias</strong> y copiá el script SQL para habilitar el guardado de proyectos en la base de datos.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2.5">
+                  <label className="font-bold text-slate-800 block">
+                    Guardar Proyecto Actual en Supabase
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      type="text"
+                      value={cloudProjectName}
+                      onChange={(e) => setCloudProjectName(e.target.value)}
+                      placeholder="Nombre del proyecto / obra"
+                      className="flex-1 min-w-[200px] px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs"
+                    />
+                    <button
+                      onClick={() => handleSaveToCloud(false)}
+                      disabled={isSavingCloud}
+                      className="px-3.5 py-1.5 bg-[#0f2b48] hover:bg-slate-800 text-white font-bold rounded-lg flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      {activeCloudProjectId ? 'Actualizar Nube' : 'Guardar en Nube'}
+                    </button>
+                    {activeCloudProjectId && (
+                      <button
+                        onClick={() => handleSaveToCloud(true)}
+                        disabled={isSavingCloud}
+                        className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-800 font-bold rounded-lg"
+                      >
+                        Guardar como Nuevo
+                      </button>
+                    )}
+                  </div>
+                  {cloudSyncStatus && (
+                    <div className="text-[11px] font-semibold text-slate-800 bg-white border border-slate-200 rounded px-2.5 py-1.5">
+                      {cloudSyncStatus}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="font-bold text-slate-800">
+                    Mis Proyectos Guardados ({cloudProjects.length})
+                  </div>
+                  {cloudProjects.length === 0 ? (
+                    <p className="text-slate-500 text-[11px]">
+                      Todavía no tenés proyectos guardados en la nube. Guardá el actual arriba.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                      {cloudProjects.map((proj) => (
+                        <div
+                          key={proj.id}
+                          className={`p-2.5 rounded-lg border flex items-center justify-between gap-2 ${
+                            activeCloudProjectId === proj.id
+                              ? 'bg-blue-50 border-blue-400'
+                              : 'bg-white border-slate-200'
+                          }`}
+                        >
+                          <div>
+                            <div className="font-bold text-slate-900">{proj.name}</div>
+                            <div className="text-[10px] text-slate-500">
+                              Actualizado: {new Date(proj.updated_at).toLocaleString('es-AR')}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => handleLoadCloudProject(proj)}
+                              className="px-2.5 py-1 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded text-[11px] flex items-center gap-1"
+                            >
+                              <FolderOpen className="w-3 h-3" />
+                              Abrir
+                            </button>
+                            <button
+                              onClick={() => handleDeleteCloudProject(proj.id)}
+                              title="Eliminar proyecto"
+                              className="p-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 8. MODAL 5: RESTABLECER / NUEVA CONTRASEÑA (PASSWORD_RECOVERY) */}
+      {showPasswordRecoveryModal && (
+        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 no-print">
+          <div className="bg-white border-2 border-[#0f2b48] rounded-xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-100 text-blue-800 rounded-lg">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-[#0f2b48]">
+                    Definir Nueva Contraseña
+                  </h3>
+                  <span className="text-[11px] text-slate-600 font-medium">
+                    Recuperación de acceso en Supabase Auth
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowPasswordRecoveryModal(false)}
+                className="p-1 text-slate-500 hover:text-slate-900 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {recoveryFeedback && (
+              <div
+                className={`p-3 rounded-lg border text-xs font-semibold flex items-start gap-2 ${
+                  recoveryFeedback.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                    : 'bg-red-50 border-red-300 text-red-900'
+                }`}
+              >
+                {recoveryFeedback.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-700" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
+                )}
+                <span>{recoveryFeedback.text}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateRecoveredPassword} className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Nueva Contraseña (mínimo 6 caracteres)
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={newRecoveryPassword}
+                    onChange={(e) => setNewRecoveryPassword(e.target.value)}
+                    placeholder="Ingresá tu nueva contraseña"
+                    className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Confirmar Nueva Contraseña
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={confirmRecoveryPassword}
+                    onChange={(e) => setConfirmRecoveryPassword(e.target.value)}
+                    placeholder="Repetí tu nueva contraseña"
+                    className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordRecoveryModal(false)}
+                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-xs rounded-lg"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={recoveryLoading}
+                  className="px-4 py-2 bg-[#0f2b48] hover:bg-slate-800 text-white font-bold text-xs rounded-lg shadow-sm disabled:opacity-50"
+                >
+                  {recoveryLoading ? 'Guardando...' : 'Guardar Nueva Contraseña'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

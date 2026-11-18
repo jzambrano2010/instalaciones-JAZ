@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  createSupabaseServerClient,
+  computeLicenseSummary,
+  isSchemaMissingError,
+  OWNER_ADMIN_EMAIL,
+} from '@/lib/supabase';
 
-// Server-side in-memory cache for standalone deployments without external DB configured
-const serverRegistrationStore: Record<string, { trialStartDate: string; activeLicenseCode?: string; licenseDaysLeft?: number }> = {};
+const serverRegistrationStore: Record<
+  string,
+  { trialStartDate: string; activeLicenseCode?: string; licenseExpiresAt?: string }
+> = {};
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,134 +20,194 @@ export async function POST(req: NextRequest) {
       action?: string;
     };
 
-    const cleanIdentifier = (userIdentifier || 'default_user').trim().toLowerCase();
+    const authHeader = req.headers.get('authorization') || '';
+    const bearerToken = authHeader.toLowerCase().startsWith('bearer ')
+      ? authHeader.slice(7).trim()
+      : '';
+
+    const supabase = createSupabaseServerClient(bearerToken || undefined);
     const now = new Date();
+    const nowIso = now.toISOString();
 
-    // Check if Supabase or external database is configured in environment
-    const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    // If user is authenticated via Supabase Auth JWT
+    if (bearerToken) {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser(bearerToken);
 
-    let trialStartDate = new Date();
-    let activeLicenseCode = licenseCode?.trim() || undefined;
+      if (!userError && user) {
+        let profileRow: any = null;
+        let schemaReady = true;
 
-    // If Supabase API key is configured, perform remote query
-    if (supabaseUrl && supabaseKey) {
-      try {
-        const supaRes = await fetch(`${supabaseUrl}/rest/v1/licenses?user_id=eq.${encodeURIComponent(cleanIdentifier)}`, {
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-          },
-        });
-        if (supaRes.ok) {
-          const supaText = await supaRes.text();
-          let rows: any[] = [];
-          try {
-            const parsed = supaText ? JSON.parse(supaText) : [];
-            if (Array.isArray(parsed)) rows = parsed;
-          } catch {
-            rows = [];
+        const { data: existingProfile, error: profErr } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (profErr) {
+          if (isSchemaMissingError(profErr)) {
+            schemaReady = false;
           }
-          if (rows && rows.length > 0) {
-            trialStartDate = new Date(rows[0].created_at);
-            if (rows[0].active_license) {
-              activeLicenseCode = rows[0].active_license;
+        } else if (existingProfile) {
+          profileRow = existingProfile;
+        } else {
+          // Insert initial profile row for authenticated user
+          const cleanEmail = (user.email || '').toLowerCase();
+          const role = cleanEmail === OWNER_ADMIN_EMAIL ? 'administrador' : 'profesional';
+          const { data: inserted, error: insErr } = await supabase
+            .from('profiles')
+            .insert({
+              id: user.id,
+              email: user.email || '',
+              full_name: user.user_metadata?.full_name || '',
+              matricula: user.user_metadata?.matricula || '',
+              role,
+              trial_started_at: user.user_metadata?.trial_started_at || user.created_at || nowIso,
+              license_status: 'trial',
+            })
+            .select('*')
+            .single();
+
+          if (!insErr && inserted) {
+            profileRow = inserted;
+          } else if (isSchemaMissingError(insErr)) {
+            schemaReady = false;
+          }
+        }
+
+        const trimmedCode = (licenseCode || '').trim();
+        if (action === 'activate' && trimmedCode.startsWith('LIC-PRO-')) {
+          const expiresAt = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000).toISOString();
+
+          if (schemaReady) {
+            // Optional check against license_codes table if populated
+            const { data: codeRecord, error: codeErr } = await supabase
+              .from('license_codes')
+              .select('code, duration_days, redeemed_by, is_active')
+              .eq('code', trimmedCode)
+              .maybeSingle();
+
+            let durationDays = 60;
+            if (!codeErr && codeRecord) {
+              if (!codeRecord.is_active || (codeRecord.redeemed_by && codeRecord.redeemed_by !== user.id)) {
+                return NextResponse.json(
+                  {
+                    success: false,
+                    error: 'Este código de licencia ya fue utilizado o está inactivo.',
+                  },
+                  { status: 400 }
+                );
+              }
+              durationDays = codeRecord.duration_days || 60;
+              await supabase
+                .from('license_codes')
+                .update({ redeemed_by: user.id, redeemed_at: nowIso, is_active: false })
+                .eq('code', trimmedCode);
+            }
+
+            const calcExpiresAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+            const { data: updatedProf, error: updErr } = await supabase
+              .from('profiles')
+              .update({
+                license_status: 'active',
+                license_code: trimmedCode,
+                license_activated_at: nowIso,
+                license_expires_at: calcExpiresAt,
+                updated_at: nowIso,
+              })
+              .eq('id', user.id)
+              .select('*')
+              .single();
+
+            if (!updErr && updatedProf) {
+              profileRow = updatedProf;
             }
           } else {
-            // Register new user in Supabase
-            await fetch(`${supabaseUrl}/rest/v1/licenses`, {
-              method: 'POST',
-              headers: {
-                apikey: supabaseKey,
-                Authorization: `Bearer ${supabaseKey}`,
-                'Content-Type': 'application/json',
-                Prefer: 'return=minimal',
-              },
-              body: JSON.stringify({
-                user_id: cleanIdentifier,
-                created_at: now.toISOString(),
-              }),
-            });
+            profileRow = {
+              id: user.id,
+              email: user.email || '',
+              full_name: user.user_metadata?.full_name || '',
+              matricula: user.user_metadata?.matricula || '',
+              role:
+                (user.email || '').toLowerCase() === OWNER_ADMIN_EMAIL
+                  ? 'administrador'
+                  : 'profesional',
+              trial_started_at: user.user_metadata?.trial_started_at || user.created_at || nowIso,
+              license_status: 'active',
+              license_code: trimmedCode,
+              license_activated_at: nowIso,
+              license_expires_at: expiresAt,
+            };
           }
         }
-      } catch (err) {
-        console.warn('Supabase remote query failed, falling back to server verification logic:', err);
-      }
-    } else {
-      // In-Memory / Local Server Fallback Store
-      if (!serverRegistrationStore[cleanIdentifier]) {
-        serverRegistrationStore[cleanIdentifier] = {
-          trialStartDate: now.toISOString(),
-        };
-      }
-      trialStartDate = new Date(serverRegistrationStore[cleanIdentifier].trialStartDate);
-      if (serverRegistrationStore[cleanIdentifier].activeLicenseCode) {
-        activeLicenseCode = serverRegistrationStore[cleanIdentifier].activeLicenseCode;
-      }
-    }
 
-    // Process License Code activation if provided
-    let licenseActive = false;
-    let licenseDaysLeft = 0;
-
-    if (activeLicenseCode && activeLicenseCode.startsWith('LIC-PRO-')) {
-      licenseActive = true;
-      licenseDaysLeft = 60;
-
-      // Update server store
-      if (serverRegistrationStore[cleanIdentifier]) {
-        serverRegistrationStore[cleanIdentifier].activeLicenseCode = activeLicenseCode;
-      }
-
-      // If Supabase is configured, update license record remotely
-      if (supabaseUrl && supabaseKey && action === 'activate') {
-        try {
-          await fetch(`${supabaseUrl}/rest/v1/licenses?user_id=eq.${encodeURIComponent(cleanIdentifier)}`, {
-            method: 'PATCH',
-            headers: {
-              apikey: supabaseKey,
-              Authorization: `Bearer ${supabaseKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              active_license: activeLicenseCode,
-              license_updated_at: now.toISOString(),
-            }),
-          });
-        } catch (e) {
-          console.error('Error updating Supabase license record:', e);
-        }
+        const summary = computeLicenseSummary(profileRow, user);
+        return NextResponse.json({
+          success: true,
+          authenticated: true,
+          userId: user.id,
+          userIdentifier: user.email || user.id,
+          role: summary.role,
+          trialStartDate: summary.trialStartDate,
+          licenseActive: summary.licenseActive,
+          licenseDaysLeft: summary.licenseDaysLeft,
+          trialDaysLeft: summary.trialDaysLeft,
+          isExpired: summary.isExpired,
+          licenseCode: summary.licenseCode,
+          licenseExpiresAt: summary.licenseExpiresAt,
+          databaseConfigured: true,
+          schemaReady,
+          message: summary.licenseActive
+            ? `Licencia Comercial activa (${summary.licenseDaysLeft} días restantes) sincronizada en Supabase.`
+            : summary.isExpired
+            ? 'Tu período de evaluación gratuito de 15 días ha finalizado. Activá una licencia comercial.'
+            : `Cuenta verificada en Supabase · Período de prueba activo: restan ${summary.trialDaysLeft} día(s).`,
+        });
       }
     }
 
-    // Calculate trial days passed from server timestamp
-    const diffMs = now.getTime() - trialStartDate.getTime();
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    const trialDaysMax = 15;
-    const trialDaysLeft = Math.max(0, trialDaysMax - diffDays);
-    const isExpired = !licenseActive && trialDaysLeft <= 0;
+    // Anonymous / pre-login fallback
+    const cleanIdentifier = (userIdentifier || 'invitado').trim().toLowerCase();
+    if (!serverRegistrationStore[cleanIdentifier]) {
+      serverRegistrationStore[cleanIdentifier] = { trialStartDate: nowIso };
+    }
+    const record = serverRegistrationStore[cleanIdentifier];
+
+    const trimmedCode = (licenseCode || '').trim();
+    if (action === 'activate' && trimmedCode.startsWith('LIC-PRO-')) {
+      record.activeLicenseCode = trimmedCode;
+      record.licenseExpiresAt = new Date(now.getTime() + 60 * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    const trialMs = now.getTime() - new Date(record.trialStartDate).getTime();
+    const diffDays = Math.floor(trialMs / (1000 * 60 * 60 * 24));
+    const trialDaysLeft = Math.max(0, 15 - diffDays);
+    const licenseActive = !!record.activeLicenseCode;
 
     return NextResponse.json({
       success: true,
+      authenticated: false,
       userIdentifier: cleanIdentifier,
-      trialStartDate: trialStartDate.toISOString(),
+      role: 'profesional',
+      trialStartDate: record.trialStartDate,
       licenseActive,
-      licenseDaysLeft: licenseActive ? licenseDaysLeft : 0,
+      licenseDaysLeft: licenseActive ? 60 : 0,
       trialDaysLeft,
-      isExpired,
-      databaseConfigured: !!(supabaseUrl && supabaseKey),
+      isExpired: !licenseActive && trialDaysLeft <= 0,
+      databaseConfigured: true,
+      schemaReady: true,
       message: licenseActive
-        ? 'Licencia Comercial de 60 Días verificada exitosamente en el servidor remoto.'
-        : isExpired
-        ? 'El Período de Evaluación Gratuito de 15 días ha expirado en el servidor remoto.'
-        : `Período de prueba activo: restan ${trialDaysLeft} día(s) calculados desde el servidor.`,
+        ? 'Licencia activada localmente. Iniciá sesión con tu cuenta para guardarla en Supabase.'
+        : `Modo invitado (${trialDaysLeft} días de evaluación). Iniciá sesión o registrate para sincronizar con Supabase.`,
     });
   } catch (err: any) {
     console.error('Error verifying remote license:', err);
     return NextResponse.json(
       {
         success: false,
-        error: err.message || 'Error al validar la licencia con el servidor remoto.',
+        error: err?.message || 'Error al validar la licencia con el servidor remoto.',
       },
       { status: 500 }
     );
