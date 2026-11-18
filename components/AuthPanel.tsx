@@ -20,10 +20,15 @@ import { getSupabaseBrowserClient, isSchemaMissingError, OWNER_ADMIN_EMAIL } fro
 interface AuthPanelProps {
   onAuthSuccess?: (user: User) => void;
   compact?: boolean;
+  defaultMode?: 'login' | 'register' | 'reset';
 }
 
-export default function AuthPanel({ onAuthSuccess, compact = false }: AuthPanelProps) {
-  const [mode, setMode] = useState<'login' | 'register' | 'reset'>('login');
+export default function AuthPanel({
+  onAuthSuccess,
+  compact = false,
+  defaultMode = 'login',
+}: AuthPanelProps) {
+  const [mode, setMode] = useState<'login' | 'register' | 'reset'>(defaultMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
@@ -81,6 +86,8 @@ export default function AuthPanel({ onAuthSuccess, compact = false }: AuthPanelP
       return 'La contraseña debe tener al menos 6 caracteres.';
     if (lower.includes('unable to validate email address'))
       return 'El formato del correo electrónico no es válido.';
+    if (lower.includes('forbidden use of secret api key'))
+      return 'Error de configuración: se usó una clave secreta (sb_secret_) en el navegador. Debe usarse la clave pública (sb_publishable_ / anon) en NEXT_PUBLIC_SUPABASE_ANON_KEY.';
     if (lower.includes('rate limit') || lower.includes('too many requests'))
       return 'Demasiados intentos seguidos. Esperá un momento antes de volver a intentar.';
     return msg || 'Ocurrió un error al autenticar con Supabase.';

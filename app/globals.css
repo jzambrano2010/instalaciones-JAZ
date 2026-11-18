@@ -24,6 +24,87 @@ body {
   }
 }
 
+@keyframes celeste-bands-drift {
+  0% {
+    transform: translate3d(-4%, -4%, 0) rotate(-14deg);
+  }
+  50% {
+    transform: translate3d(4%, 2%, 0) rotate(-14deg);
+  }
+  100% {
+    transform: translate3d(-4%, -4%, 0) rotate(-14deg);
+  }
+}
+
+@keyframes logo-slow-float {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -8px, 0) scale(1.018);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes marquee-rtl {
+  0% {
+    transform: translate3d(0%, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.landing-celeste-bands {
+  background-image: repeating-linear-gradient(
+    90deg,
+    #ffffff 0px,
+    #ffffff 96px,
+    #bae6fd 96px,
+    #bae6fd 180px,
+    #7dd3fc 180px,
+    #7dd3fc 230px,
+    #ffffff 230px,
+    #ffffff 320px,
+    #e0f2fe 320px,
+    #e0f2fe 400px
+  );
+  animation: celeste-bands-drift 28s ease-in-out infinite;
+  will-change: transform;
+}
+
+.landing-logo-float {
+  animation: logo-slow-float 9s ease-in-out infinite;
+  will-change: transform;
+}
+
+.landing-marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee-rtl 26s linear infinite;
+  will-change: transform;
+}
+
+.landing-marquee-track:hover {
+  animation-play-state: paused;
+}
+
+.marquee-arial-14pt {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 14pt;
+  line-height: 1.35;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-celeste-bands,
+  .landing-logo-float,
+  .landing-marquee-track {
+    animation: none !important;
+  }
+}
+
 /* Print configuration for A4 sheets per tab */
 @media print {
   @page {

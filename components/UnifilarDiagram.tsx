@@ -35,8 +35,34 @@ export default function UnifilarDiagram({ params, floors }: UnifilarDiagramProps
   const demand = calculateDemand(allCircuits, params);
   const sectionalBoards = calculateSectionalBoards(params, floorCircuits, demand.isThreePhase);
   const phaseBalance = calculatePhaseBalance(allCircuits, sectionalBoards, demand.isThreePhase);
+  const threePhaseProjection = demand.isThreePhase
+    ? phaseBalance
+    : calculatePhaseBalance(allCircuits, undefined, true);
   const directTceCircuits = allCircuits.filter(
     (c) => c.boardCode === 'TCE' || c.boardTarget === 'TP'
+  );
+  const directTceWattsByPhase = directTceCircuits.reduce(
+    (acc, circ) => {
+      const assigned = phaseBalance.circuitPhases[circ.id];
+      const is3P =
+        assigned === '3F' ||
+        Boolean(circ.isThreePhase) ||
+        circ.d.includes('380V') ||
+        circ.d.includes('Trifásico');
+      if (is3P) {
+        acc.l1 += circ.W / 3;
+        acc.l2 += circ.W / 3;
+        acc.l3 += circ.W / 3;
+      } else if (assigned === 'L2') {
+        acc.l2 += circ.W;
+      } else if (assigned === 'L3') {
+        acc.l3 += circ.W;
+      } else {
+        acc.l1 += circ.W;
+      }
+      return acc;
+    },
+    { l1: 0, l2: 0, l3: 0 }
   );
 
   // Derived state for the active diagram, allowing manual override
@@ -1242,6 +1268,336 @@ export default function UnifilarDiagram({ params, floors }: UnifilarDiagramProps
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* 4B. Tabla Adicional de Balance de Fases (L1, L2, L3) y Desequilibrio Automático (< 15% AEA) */}
+      <div className="bg-white border border-slate-300 rounded-xl p-5 shadow-sm space-y-3 avoid-break">
+        <div className="bg-slate-100 border-2 border-[#0f2b48] text-[#0f2b48] px-4 py-2.5 rounded-lg font-bold text-sm uppercase tracking-wide flex flex-wrap items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <Activity className="w-4 h-4 text-emerald-700" />
+            TABLA DE BALANCE DE FASES (L1, L2, L3) Y DESEQUILIBRIO AUTOMÁTICO (AEA 90364 &lt; 15%)
+          </span>
+          {demand.isThreePhase ? (
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded border text-xs font-extrabold ${
+                phaseBalance.isBalanced
+                  ? 'bg-emerald-100 text-emerald-900 border-emerald-400'
+                  : 'bg-red-100 text-red-900 border-red-400'
+              }`}
+            >
+              {phaseBalance.isBalanced ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5 text-red-700" />
+              )}
+              Desequilibrio TCE: {phaseBalance.unbalancePercent}% (
+              {phaseBalance.isBalanced ? 'Cumple ≤ 15%' : 'Supera 15%'})
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded border bg-blue-100 text-blue-900 border-blue-300 text-xs font-extrabold">
+              Suministro Monofásico 220V · Proyección 3F: {threePhaseProjection.unbalancePercent}%
+            </span>
+          )}
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border border-slate-300 border-collapse tabular-nums">
+            <thead>
+              <tr className="bg-[#0f2b48] text-white font-bold">
+                <th className="p-2.5 border border-slate-500">Tablero / Sector</th>
+                <th className="p-2.5 border border-slate-500">Régimen</th>
+                <th className="p-2.5 border border-slate-500 text-right">Fase L1 (R)</th>
+                <th className="p-2.5 border border-slate-500 text-right">Fase L2 (S)</th>
+                <th className="p-2.5 border border-slate-500 text-right">Fase L3 (T)</th>
+                <th className="p-2.5 border border-slate-500 text-right">Pot. Total / Prom.</th>
+                <th className="p-2.5 border border-slate-500 text-center">Desequilibrio (%)</th>
+                <th className="p-2.5 border border-slate-500 text-center">Requisito AEA (&lt; 15%)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sectionalBoards.map((sb, idx) => {
+                const ipb = sb.internalPhaseBalance;
+                const sbTotalW = ipb.wattsL1 + ipb.wattsL2 + ipb.wattsL3;
+                const sbAvgW = Math.round(sbTotalW / 3);
+                const pct1 = sbTotalW > 0 ? Math.round((ipb.wattsL1 / sbTotalW) * 100) : 0;
+                const pct2 = sbTotalW > 0 ? Math.round((ipb.wattsL2 / sbTotalW) * 100) : 0;
+                const pct3 = sbTotalW > 0 ? Math.round((ipb.wattsL3 / sbTotalW) * 100) : 0;
+
+                return (
+                  <tr key={sb.floorId} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                    <td className="p-2 border border-slate-300 font-bold text-[#0f2b48]">
+                      <span className="font-mono">{sb.boardCode}</span> · {sb.boardName}
+                    </td>
+                    <td className="p-2 border border-slate-300 text-slate-700 font-medium">
+                      {sb.isThreePhase ? 'Trifásico 380V' : `Monofásico (${sb.assignedPhase})`}
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono">
+                      <span className="font-bold text-amber-900">
+                        {ipb.wattsL1.toLocaleString('es-AR')} W
+                      </span>
+                      <span className="block text-[10px] text-slate-600">
+                        {ipb.ampsL1} A · {pct1}%
+                      </span>
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono">
+                      <span className="font-bold text-slate-900">
+                        {ipb.wattsL2.toLocaleString('es-AR')} W
+                      </span>
+                      <span className="block text-[10px] text-slate-600">
+                        {ipb.ampsL2} A · {pct2}%
+                      </span>
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono">
+                      <span className="font-bold text-purple-900">
+                        {ipb.wattsL3.toLocaleString('es-AR')} W
+                      </span>
+                      <span className="block text-[10px] text-slate-600">
+                        {ipb.ampsL3} A · {pct3}%
+                      </span>
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono">
+                      <span className="font-bold text-slate-900">
+                        {sbTotalW.toLocaleString('es-AR')} W
+                      </span>
+                      <span className="block text-[10px] text-slate-500">
+                        Prom: {sbAvgW.toLocaleString('es-AR')} W
+                      </span>
+                    </td>
+                    <td className="p-2 border border-slate-300 text-center font-mono font-black">
+                      {sb.isThreePhase ? (
+                        <span
+                          className={
+                            ipb.isBalanced ? 'text-emerald-800' : 'text-red-700'
+                          }
+                        >
+                          {ipb.unbalancePercent}%
+                        </span>
+                      ) : (
+                        <span className="text-slate-600">N/A (1F)</span>
+                      )}
+                    </td>
+                    <td className="p-2 border border-slate-300 text-center">
+                      {!sb.isThreePhase ? (
+                        <span className="text-[11px] font-bold text-blue-800">
+                          Carga asignada a {sb.assignedPhase}
+                        </span>
+                      ) : ipb.isBalanced ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Cumple (&lt; 15%)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-red-700">
+                          <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
+                          Supera 15%
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {directTceCircuits.length > 0 && (() => {
+                const l1 = Math.round(directTceWattsByPhase.l1);
+                const l2 = Math.round(directTceWattsByPhase.l2);
+                const l3 = Math.round(directTceWattsByPhase.l3);
+                const tot = l1 + l2 + l3;
+                const avg = tot / 3;
+                const dev =
+                  avg > 0
+                    ? parseFloat(
+                        (
+                          (Math.max(Math.abs(l1 - avg), Math.abs(l2 - avg), Math.abs(l3 - avg)) /
+                            avg) *
+                          100
+                        ).toFixed(1)
+                      )
+                    : 0;
+                const ok = dev <= 15.0;
+                return (
+                  <tr className="bg-white">
+                    <td className="p-2 border border-slate-300 font-bold text-[#0f2b48]">
+                      <span className="font-mono">TCE</span> · Salidas Directas
+                    </td>
+                    <td className="p-2 border border-slate-300 text-slate-700 font-medium">
+                      Cabecera Directa
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono font-bold text-amber-900">
+                      {l1.toLocaleString('es-AR')} W
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono font-bold text-slate-900">
+                      {l2.toLocaleString('es-AR')} W
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono font-bold text-purple-900">
+                      {l3.toLocaleString('es-AR')} W
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono font-bold text-slate-900">
+                      {tot.toLocaleString('es-AR')} W
+                    </td>
+                    <td className="p-2 border border-slate-300 text-center font-mono font-black">
+                      {demand.isThreePhase ? `${dev}%` : 'N/A (1F)'}
+                    </td>
+                    <td className="p-2 border border-slate-300 text-center font-bold text-[11px]">
+                      {!demand.isThreePhase ? (
+                        <span className="text-blue-800">Monofásico (L1)</span>
+                      ) : ok ? (
+                        <span className="text-emerald-800">Cumple (&lt; 15%)</span>
+                      ) : (
+                        <span className="text-red-700">Revisar reparto</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })()}
+
+              {/* Consolidated TCE Total Row */}
+              {(() => {
+                const totalW = phaseBalance.wattsL1 + phaseBalance.wattsL2 + phaseBalance.wattsL3;
+                const p1 = totalW > 0 ? Math.round((phaseBalance.wattsL1 / totalW) * 100) : 0;
+                const p2 = totalW > 0 ? Math.round((phaseBalance.wattsL2 / totalW) * 100) : 0;
+                const p3 = totalW > 0 ? Math.round((phaseBalance.wattsL3 / totalW) * 100) : 0;
+                return (
+                  <tr className="bg-slate-200 border-t-2 border-b-2 border-[#0f2b48] font-extrabold text-slate-900">
+                    <td className="p-2.5 border border-slate-400">
+                      TOTAL CONSOLIDADO TCE
+                    </td>
+                    <td className="p-2.5 border border-slate-400">
+                      {demand.isThreePhase ? 'Trifásico 380V' : 'Monofásico 220V'}
+                    </td>
+                    <td className="p-2.5 border border-slate-400 text-right font-mono text-amber-900">
+                      {phaseBalance.wattsL1.toLocaleString('es-AR')} W
+                      <span className="block text-[10px] font-bold text-amber-800">
+                        {phaseBalance.ampsL1} A · {p1}%
+                      </span>
+                    </td>
+                    <td className="p-2.5 border border-slate-400 text-right font-mono text-slate-900">
+                      {phaseBalance.wattsL2.toLocaleString('es-AR')} W
+                      <span className="block text-[10px] font-bold text-slate-700">
+                        {phaseBalance.ampsL2} A · {p2}%
+                      </span>
+                    </td>
+                    <td className="p-2.5 border border-slate-400 text-right font-mono text-purple-900">
+                      {phaseBalance.wattsL3.toLocaleString('es-AR')} W
+                      <span className="block text-[10px] font-bold text-purple-800">
+                        {phaseBalance.ampsL3} A · {p3}%
+                      </span>
+                    </td>
+                    <td className="p-2.5 border border-slate-400 text-right font-mono">
+                      {totalW.toLocaleString('es-AR')} W
+                      <span className="block text-[10px] font-semibold text-slate-700">
+                        Prom: {phaseBalance.avgWatts.toLocaleString('es-AR')} W
+                      </span>
+                    </td>
+                    <td className="p-2.5 border border-slate-400 text-center font-mono text-sm">
+                      {demand.isThreePhase ? (
+                        <span
+                          className={
+                            phaseBalance.isBalanced ? 'text-emerald-800' : 'text-red-700'
+                          }
+                        >
+                          {phaseBalance.unbalancePercent}%
+                        </span>
+                      ) : (
+                        <span className="text-blue-900 text-xs">100% en L1</span>
+                      )}
+                    </td>
+                    <td className="p-2.5 border border-slate-400 text-center">
+                      {!demand.isThreePhase ? (
+                        <span className="text-blue-900 text-xs font-bold">
+                          Instalación Monofásica
+                        </span>
+                      ) : phaseBalance.isBalanced ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-800 font-black">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                          CUMPLE (&lt; 15%)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-red-700 font-black">
+                          <AlertTriangle className="w-4 h-4 text-red-700" />
+                          SUPERA 15%
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })()}
+
+              {/* Automatic 3-Phase Projection Row when currently configured as Single-Phase */}
+              {!demand.isThreePhase && (() => {
+                const projTotal =
+                  threePhaseProjection.wattsL1 +
+                  threePhaseProjection.wattsL2 +
+                  threePhaseProjection.wattsL3;
+                const pp1 =
+                  projTotal > 0 ? Math.round((threePhaseProjection.wattsL1 / projTotal) * 100) : 0;
+                const pp2 =
+                  projTotal > 0 ? Math.round((threePhaseProjection.wattsL2 / projTotal) * 100) : 0;
+                const pp3 =
+                  projTotal > 0 ? Math.round((threePhaseProjection.wattsL3 / projTotal) * 100) : 0;
+                return (
+                  <tr className="bg-blue-50/70 text-slate-900 font-semibold">
+                    <td className="p-2 border border-slate-300 text-blue-950 font-bold">
+                      Simulación Reparto Trifásico (L1/L2/L3)
+                    </td>
+                    <td className="p-2 border border-slate-300 text-blue-900">
+                      Proyección 380V
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono text-amber-900">
+                      {threePhaseProjection.wattsL1.toLocaleString('es-AR')} W
+                      <span className="block text-[10px] text-slate-600">
+                        {threePhaseProjection.ampsL1} A · {pp1}%
+                      </span>
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono text-slate-900">
+                      {threePhaseProjection.wattsL2.toLocaleString('es-AR')} W
+                      <span className="block text-[10px] text-slate-600">
+                        {threePhaseProjection.ampsL2} A · {pp2}%
+                      </span>
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono text-purple-900">
+                      {threePhaseProjection.wattsL3.toLocaleString('es-AR')} W
+                      <span className="block text-[10px] text-slate-600">
+                        {threePhaseProjection.ampsL3} A · {pp3}%
+                      </span>
+                    </td>
+                    <td className="p-2 border border-slate-300 text-right font-mono">
+                      {projTotal.toLocaleString('es-AR')} W
+                      <span className="block text-[10px] text-slate-600">
+                        Prom: {threePhaseProjection.avgWatts.toLocaleString('es-AR')} W
+                      </span>
+                    </td>
+                    <td className="p-2 border border-slate-300 text-center font-mono font-black">
+                      <span
+                        className={
+                          threePhaseProjection.isBalanced ? 'text-emerald-800' : 'text-red-700'
+                        }
+                      >
+                        {threePhaseProjection.unbalancePercent}%
+                      </span>
+                    </td>
+                    <td className="p-2 border border-slate-300 text-center">
+                      {threePhaseProjection.isBalanced ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Cumpliría (&lt; 15%)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                          Superaría 15%
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })()}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="text-[11px] text-slate-600 leading-relaxed">
+          <strong>Fórmula de verificación AEA 90364:</strong> Desequilibrio (%) = máx(|P<sub>L1</sub> − P<sub>prom</sub>|, |P<sub>L2</sub> − P<sub>prom</sub>|, |P<sub>L3</sub> − P<sub>prom</sub>|) / P<sub>prom</sub> × 100. El desequilibrio entre fases debe mantenerse <strong>&le; 15%</strong> en suministros trifásicos 380 V.
+        </p>
       </div>
 
       {/* 5. Referencias y Notas Importantes */}

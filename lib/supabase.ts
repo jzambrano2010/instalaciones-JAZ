@@ -14,19 +14,48 @@ function resolveSupabaseUrl(...candidates: Array<string | undefined>): string {
   return DEFAULT_SUPABASE_URL;
 }
 
-function resolveSupabaseKey(...candidates: Array<string | undefined>): string {
+function isSecretSupabaseKey(val: string): boolean {
+  const trimmed = val.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('sb_secret_')) return true;
+  // Detect legacy JWT service_role keys
+  if (trimmed.startsWith('eyJ')) {
+    try {
+      const parts = trimmed.split('.');
+      if (parts.length >= 2) {
+        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const jsonStr =
+          typeof atob === 'function'
+            ? atob(base64)
+            : Buffer.from(base64, 'base64').toString('utf8');
+        const payload = JSON.parse(jsonStr);
+        if (payload?.role === 'service_role') return true;
+      }
+    } catch {
+      // Ignore malformed JWT parsing
+    }
+  }
+  return false;
+}
+
+function resolveSupabaseKey(
+  candidates: Array<string | undefined>,
+  allowSecret = false
+): string {
   for (const raw of candidates) {
     const val = (raw || '').trim();
-    if (val && !val.startsWith('YOUR_') && !val.startsWith('MY_')) {
-      return val;
-    }
+    if (!val || val.startsWith('YOUR_') || val.startsWith('MY_')) continue;
+    if (!allowSecret && isSecretSupabaseKey(val)) continue;
+    return val;
   }
   return DEFAULT_SUPABASE_ANON_KEY;
 }
 
 export const SUPABASE_URL = resolveSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
 
-export const SUPABASE_ANON_KEY = resolveSupabaseKey(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+export const SUPABASE_ANON_KEY = resolveSupabaseKey([
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+]);
 
 export const OWNER_ADMIN_EMAIL = 'zambrano.julio@gmail.com';
 export const TRIAL_DURATION_DAYS = 15;
@@ -52,11 +81,11 @@ export function createSupabaseServerClient(accessToken?: string): SupabaseClient
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     SUPABASE_URL
   );
-  const serverKey = resolveSupabaseKey(
+  const serverKey = resolveSupabaseKey([
     process.env.SUPABASE_ANON_KEY,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    SUPABASE_ANON_KEY
-  );
+    SUPABASE_ANON_KEY,
+  ]);
   return createClient(serverUrl, serverKey, {
     auth: {
       persistSession: false,

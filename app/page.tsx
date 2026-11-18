@@ -55,6 +55,7 @@ import LicenseTab from '@/components/LicenseTab';
 import PrintHeader from '@/components/PrintHeader';
 import AIConsultant from '@/components/AIConsultant';
 import AuthPanel from '@/components/AuthPanel';
+import LandingGate from '@/components/LandingGate';
 
 const DEFAULT_FLOORS: FloorData[] = [
   {
@@ -216,6 +217,7 @@ export default function Home() {
     text: string;
   } | null>(null);
   const [activePrintTab, setActivePrintTab] = useState<string | null>(null);
+  const [hasEnteredApp, setHasEnteredApp] = useState<boolean>(false);
 
   // Supabase Auth & Cloud Projects State
   const [session, setSession] = useState<Session | null>(null);
@@ -296,6 +298,7 @@ export default function Home() {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session ?? null);
       if (hasRecoveryInUrl && data.session) {
+        setHasEnteredApp(true);
         setShowPasswordRecoveryModal(true);
       }
     });
@@ -305,6 +308,7 @@ export default function Home() {
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession ?? null);
       if (event === 'PASSWORD_RECOVERY') {
+        setHasEnteredApp(true);
         setRecoveryFeedback(null);
         setNewRecoveryPassword('');
         setConfirmRecoveryPassword('');
@@ -560,6 +564,15 @@ export default function Home() {
       setActivePrintTab(null);
     }, 150);
   };
+
+  if (!hasEnteredApp) {
+    return (
+      <LandingGate
+        session={session}
+        onEnterApp={() => setHasEnteredApp(true)}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col selection:bg-blue-600 selection:text-white">
@@ -1140,6 +1153,7 @@ export default function Home() {
                       onClick={async () => {
                         await getSupabaseBrowserClient().auth.signOut();
                         setShowAuthModal(false);
+                        setHasEnteredApp(false);
                       }}
                       className="px-3 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 font-bold rounded-lg flex items-center gap-1"
                     >

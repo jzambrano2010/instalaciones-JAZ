@@ -40,6 +40,7 @@ import {
   Sliders,
   GitCommit,
 } from 'lucide-react';
+import CircuitPowerChart from '@/components/CircuitPowerChart';
 
 interface LoadReportProps {
   params: TechnicalParams;
@@ -473,6 +474,9 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
           </div>
         )}
       </div>
+
+      {/* 1B. Recharts Power Demand Distribution Chart per Circuit */}
+      <CircuitPowerChart circuits={allCircuits} sectionalBoards={sectionalBoards} />
 
       {/* 2. Interactive Technical Photo Uploader Panel */}
       {showPhotoUploader && (
