@@ -1,0 +1,686 @@
+<index html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>⚡ Diseño de Instalación Eléctrica - Ley Prov. 10.281</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#12161d;--fg:#e6ebf2;--mu:#98a3b5;--card:#1b222d;--bd:#323c4c;--ac:#6ea2ff;--il:#e0a800;--tg:#1e9e5a;--aa:#1d8fd1;--lv:#8a4fd0;--ot:#d1531d;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;padding:12px;max-width:1150px;margin:auto}
+h1{font-size:20px;margin:4px 0}h2{font-size:16px;margin:16px 0 6px}.mu{color:var(--mu);font-size:13px}
+nav{display:flex;gap:6px;margin:10px 0;flex-wrap:wrap}nav button,.btn{border:1px solid var(--bd);background:var(--card);color:var(--fg);padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit}
+nav button.on,.btn.p{background:var(--ac);color:#12161d;border-color:var(--ac);font-weight:600}.btn:disabled{opacity:.5}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin:8px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+label{display:block;font-size:12px;color:var(--mu)}input,select{width:100%;padding:6px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--fg);font:inherit}
+.sc{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:13px}th,td{border-bottom:1px solid var(--bd);padding:5px 6px;text-align:left;white-space:nowrap}
+.pages{display:flex;gap:8px;overflow-x:auto}.pages canvas{max-height:220px;border:1px solid var(--bd);border-radius:6px;background:#fff}
+.pill{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}
+.badge{background:#1e9e5a22;color:#1e9e5a;border:1px solid #1e9e5a44;padding:3px 8px;border-radius:6px;font-size:12px;font-weight:600}
+.badge-warn{background:#e0a80022;color:#e0a800;border:1px solid #e0a80044;padding:3px 8px;border-radius:6px;font-size:12px;font-weight:600}
+.modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:1000;justify-content:center;align-items:center}
+.modal-content{background:var(--card);border:1px solid var(--bd);padding:20px;border-radius:10px;max-width:600px;width:90%;max-height:85vh;overflow-y:auto}
+
+/* Ocultar secciones por defecto para impresión individual por pestaña */
+.print-section { display: none; }
+.print-section.active-print { display: block; }
+
+@media print {
+ @page { size: A4 portrait; margin: 10mm; }
+ body { background: #fff !important; color: #000 !important; padding: 0 !important; font-size: 10pt !important; max-width: 100% !important; margin: 0 !important; box-sizing: border-box !important; }
+ nav, button, .card input, #st, .modal, div[style*="display:flex"] { display: none !important; }
+ .card { background: #f9f9f9 !important; border: 1px solid #ccc !important; box-shadow: none !important; margin: 0 0 10px 0 !important; padding: 6px !important; color: #000 !important; width: 100% !important; box-sizing: border-box !important; max-width: 100% !important; overflow: visible !important; }
+ .sc { overflow: visible !important; width: 100% !important; max-width: 100% !important; }
+ table { width: 100% !important; font-size: 9pt !important; border-collapse: collapse !important; color: #000 !important; table-layout: fixed !important; word-wrap: break-word !important; }
+ th, td { border: 1px solid #999 !important; padding: 3px 4px !important; color: #000 !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+ th { background: #eee !important; font-weight: bold !important; }
+ h1, h2, h3 { color: #000 !important; page-break-after: avoid; font-size: 12pt !important; margin: 6px 0 !important; }
+ 
+ /* Impresión limpia por pestaña activa */
+ section:not([hidden]) { display: block !important; width: 100% !important; }
+ section[hidden] { display: none !important; }
+}
+</style></head><body>
+
+<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+ <div>
+  <h1>⚡ Diseño de Instalación Eléctrica</h1>
+  <div class="mu">Criterios AEA 90364-7-770 · Instalador Electricista Habilitado (Ley Prov. 10.281 Córdoba)</div>
+  <div class="mu" style="color:#e0a800; font-weight:600; margin-top:2px;">⚠️ Resultados elaborados con IA, puede contener errores, revisa responsablemente los resultados</div>
+ </div>
+ <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+  <button class="btn" id="btn-help" style="font-size:13px; padding:6px 12px;">❓ Ayuda / API Key</button>
+  <div id="lic-status" class="card" style="margin:0; padding:8px 12px; display:flex; align-items:center; gap:8px;">
+   <span id="badge-lic" class="badge">Licencia Gratuita (30 días)</span>
+   <span id="lbl-days" class="mu">Restan 30 días</span>
+  </div>
+ </div>
+</div>
+
+<nav style="margin-top:14px;">
+ <button data-t="a" class="on">1 · Planos e IA</button>
+ <button data-t="b">2 · Datos y Parámetros</button>
+ <button data-t="c">3 · Cuadro y Unifilar</button>
+ <button data-t="d">4 · Cómputo y Presupuesto</button>
+ <button data-t="e">5 · Licencias / Admin.</button>
+</nav>
+
+<!-- MODAL AYUDA -->
+<div id="help-modal" class="modal">
+ <div class="modal-content">
+  <h3>Guía de Funcionamiento y API Key</h3>
+  <p class="mu">Esta aplicación asiste al proyectista electricista en el cómputo de bocas, dimensionamiento de circuitos y generación de documentación bajo normas AEA 770 y Ley 10.281.</p>
+  <h4>¿Cómo obtener tu clave API Key de Gemini?</h4>
+  <ol class="mu" style="padding-left:16px; line-height:1.5;">
+   <li>Ingresá a <a href="https://aistudio.google.com/" target="_blank" style="color:var(--ac)">Google AI Studio</a>.</li>
+   <li>Iniciá sesión con tu cuenta de Google.</li>
+   <li>Hacé clic en <b>"Get API key"</b> y creá una clave en un proyecto nuevo o existente.</li>
+   <li>Copiá la clave alfanumérica generada y pégala en el campo de configuración de la pestaña "1 · Planos e IA".</li>
+  </ol>
+  <div style="text-align:right; margin-top:16px;"><button class="btn p" id="close-help">Entendido</button></div>
+ </div>
+</div>
+
+<!-- SECCIÓN 1: PLANOS E IA -->
+<section id="a">
+ <div class="card">
+  <h3>Configuración de API Key de Gemini</h3>
+  <div class="grid" style="grid-template-columns: 1fr auto; align-items:end;">
+   <div><label>Gemini API Key</label><input type="password" id="apikey" placeholder="Pegá tu API Key de Google AI Studio"></div>
+   <div><button class="btn p" id="save-key">Guardar Key</button></div>
+  </div>
+ </div>
+
+ <div class="card">
+  <h3>Carga de Planos (PDF)</h3>
+  <input type="file" id="f" accept="application/pdf" multiple>
+  <div class="mu" style="margin-top:6px">Subí planos (PB, PA). La IA contabilizará bocas de techo, pared, tomas, aires acondicionados, lavarropas, módulos, tapas de cajas y cajas octogonales de paso.</div>
+  <div class="pages" id="pv" style="margin-top:8px"></div>
+  <div style="margin-top:8px"><label>Indicaciones extra para la IA (opcional)</label><input id="hint" placeholder="Ej: Analizar DTO 1, aires de 3000 frigorías (1400 W c/u)"></div>
+  
+  <!-- Barra de progreso de IA -->
+  <div id="ai-progress-container" style="display:none; margin-top:12px;">
+   <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+    <span id="ai-prog-text">Analizando planos...</span>
+    <span id="ai-prog-pct">0%</span>
+   </div>
+   <div style="width:100%; background:var(--bd); border-radius:6px; height:8px; overflow:hidden;">
+    <div id="ai-prog-bar" style="width:0%; background:var(--ac); height:100%; transition:width 0.3s ease;"></div>
+   </div>
+  </div>
+
+  <p style="margin-top:12px;"><button class="btn p" id="go" disabled>Analizar Planos con IA</button> <span id="st" class="mu"></span></p>
+ </div>
+</section>
+
+<!-- SECCIÓN 2: DATOS -->
+<section id="b" hidden>
+ <div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+   <h2 style="margin:0;">Datos Generales de la Vivienda</h2>
+   <button class="btn" onclick="printTab('b')">🖨️ Imprimir Pestaña 2</button>
+  </div>
+  <div class="grid" id="gen" style="margin-top:8px;"></div>
+ </div>
+ <div class="card"><h2 style="margin-top:0">Parámetros Técnicos Específicos (PAT, Pilar y Acometida)</h2><div class="grid" id="tech-params"></div></div>
+ <div id="fl"></div>
+ <button class="btn" id="addf">+ Agregar planta</button>
+ <div class="card" style="margin-top:12px;">
+  <h2 style="margin-top:0">Criterios de Verificación AEA 90364-7-770 y Ley 10.281</h2>
+  <ul class="mu" style="padding-left:18px; margin:0; line-height:1.5;">
+   <li><b>Esquema TT / PAT:</b> Jabalina Copperweld IRAM 2309 (≥1.5m), conductor principal de tierra 10 mm² entubado. Resistencia objetivo ≤ 10 Ω (máximo normativo 40 Ω).</li>
+   <li><b>Monolito / Pilar:</b> Cajas sintéticas IP43 / IK10 autoextinguibles (ERSeP RG 11/2018).</li>
+   <li><b>Materiales IRAM:</b> Cables IRAM NM 247-3, caños IRAM 62386-1, termomagnéticas IEC 60898 / IRAM 2169, diferenciales IRAM 2301.</li>
+  </ul>
+ </div>
+</section>
+
+<!-- SECCIÓN 3: RESULTADOS / UNIFILAR -->
+<section id="c" hidden>
+ <div style="text-align:right; margin-bottom:6px;"><button class="btn" onclick="printTab('c')">🖨️ Imprimir Pestaña 3</button></div>
+ <div id="res"></div>
+</section>
+
+<!-- SECCIÓN 4: CÓMPUTO Y PRESUPUESTO -->
+<section id="d" hidden>
+ <div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+   <div>
+    <h2 style="margin:0;">Listado Comercial de Materiales y Costos de Mano de Obra (Electro Instalador Córdoba)</h2>
+    <div class="mu">Cantidades de materiales y baremo de mano de obra oficial con IVA (21%). Precios editables para plaza local.</div>
+   </div>
+   <div style="display:flex; gap:8px;">
+    <button class="btn" id="fetch-prices">🔍 Buscar Precios Web</button>
+    <button class="btn" onclick="printTab('d')">🖨️ Imprimir Pestaña 4</button>
+   </div>
+  </div>
+  <div id="comp-res" class="sc" style="margin-top:12px;"></div>
+ </div>
+</section>
+
+<!-- SECCIÓN 5: LICENCIAS Y ADMINISTRADOR -->
+<section id="e" hidden>
+ <div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center;">
+   <h2 style="margin:0;">Gestión de Licencias y Roles</h2>
+   <button class="btn" onclick="printTab('e')">🖨️ Imprimir Pestaña 5</button>
+  </div>
+  <div class="grid" style="margin-top:8px;">
+   <div>
+    <label>Seleccionar Rol</label>
+    <select id="user-role">
+     <option value="profesional">Profesional (Instalador / Proyectista)</option>
+     <option value="administrador">Administrador</option>
+    </select>
+   </div>
+   <div id="admin-box" style="display:none;">
+    <label>Acciones de Administrador</label>
+    <button class="btn p" id="gen-lic-btn" style="margin-top:2px;">Generar Licencia Paga (60 días)</button>
+   </div>
+  </div>
+  <div id="prof-box" style="margin-top:12px;">
+   <label>Activar Licencia Comercial (60 días - $ 20.000.- por 60 días)</label>
+   <div class="mu">Para abonar, transferir a la cuenta de proveedor: <b>Jimena Zambrano</b> | Alias MP: <b>jime.z.mp</b> | Enviar comprobante por WhatsApp: <b>+54 9 3525 50-9715</b></div>
+   <div style="display:flex; gap:8px; margin-top:8px;">
+    <input type="text" id="lic-code-input" placeholder="Ingresá el código de licencia provisto por el Admin">
+    <button class="btn p" id="apply-lic-btn">Aplicar Licencia</button>
+   </div>
+  </div>
+ </div>
+</section>
+
+<script>
+const $=s=>document.querySelector(s);
+
+// Función de impresión independiente por pestaña
+function printTab(tabId){
+ document.querySelectorAll("section").forEach(sec => {
+  if(sec.id === tabId) {
+   sec.classList.add("active-print");
+   sec.hidden = false;
+  } else {
+   sec.classList.remove("active-print");
+   sec.hidden = true;
+  }
+ });
+ window.print();
+ // Restaurar vista de la pestaña activa tras imprimir
+ const currentActiveBtn = document.querySelector("nav button.on");
+ if(currentActiveBtn) {
+  const targetId = currentActiveBtn.dataset.t;
+  document.querySelectorAll("section").forEach(sec => {
+   sec.hidden = sec.id !== targetId;
+   sec.classList.remove("active-print");
+  });
+ }
+}
+
+// Modal de Ayuda
+$("#btn-help").onclick = () => { $("#help-modal").style.display = "flex"; };
+$("#close-help").onclick = () => { $("#help-modal").style.display = "none"; };
+
+// Estado de Licencia y App
+let AppState = {
+ role: "profesional",
+ trialDaysLeft: 30,
+ licenseActive: false,
+ licenseDaysLeft: 0,
+ api: localStorage.getItem("gemini_apikey") || ""
+};
+
+if(AppState.api) { $("#apikey").value = AppState.api; }
+
+$("#save-key").onclick = ()=>{
+ AppState.api = $("#apikey").value.trim();
+ localStorage.setItem("gemini_apikey", AppState.api);
+ alert("API Key guardada correctamente.");
+};
+
+$("#user-role").onchange = (e)=>{
+ AppState.role = e.target.value;
+ $("#admin-box").style.display = AppState.role === "administrador" ? "block" : "none";
+ $("#prof-box").style.display = AppState.role === "administrador" ? "none" : "block";
+};
+
+$("#gen-lic-btn").onclick = ()=>{
+ const code = "LIC-PRO-" + Math.random().toString(36).substring(2, 9).toUpperCase() + "-2026";
+ prompt("Código de licencia generado para el profesional:", code);
+};
+
+$("#apply-lic-btn").onclick = ()=>{
+ const val = $("#lic-code-input").value.trim();
+ if(val.startsWith("LIC-PRO-")){
+  AppState.licenseActive = true;
+  AppState.licenseDaysLeft = 60;
+  updateLicUI();
+  alert("¡Licencia comercial de 60 días activada con éxito!");
+ } else {
+  alert("Código de licencia inválido.");
+ }
+};
+
+function updateLicUI(){
+ if(AppState.licenseActive){
+  $("#badge-lic").textContent = "Licencia Comercial Activa";
+  $("#badge-lic").className = "badge";
+  $("#lbl-days").textContent = `Restan ${AppState.licenseDaysLeft} días`;
+ } else {
+  $("#badge-lic").textContent = "Período Gratuito";
+  $("#badge-lic").className = "badge-warn";
+  $("#lbl-days").textContent = `Restan ${AppState.trialDaysLeft} días (Valor ampliación: $ 20.000.- por 60 días)`;
+ }
+}
+updateLicUI();
+
+// Datos del proyecto eléctrico
+const S={
+ area:115, V:220, L:6, wl:15, aaW:1400, lavW:750,
+ sumType:"Monofásico (Max 5kW a verificar con EPEC)",
+ epecFeat:"Pendiente de solicitud de factibilidad",
+ pillarLoc:"Línea municipal (respetando retiros con gas)",
+ distPillar:12,
+ soilRes:50,
+ floors:[
+  {name:"Planta Baja",techo:15,pared:0,tomas:12,aa:2,lav:0,otros:0,otrosW:0, modPuntos:15, modTomas:12, tapas:27, cajasOct:18},
+  {name:"Planta Alta",techo:10,pared:0,tomas:10,aa:2,lav:1,otros:0,otrosW:0, modPuntos:10, modTomas:10, tapas:21, cajasOct:13}
+]};
+
+const GEN=[["area","Superficie (m²)"],["V","Tensión (V)"],["L","Alimentador a PA (m)"],["wl","W por boca de luz"],["aaW","W por aire acond."],["lavW","W lavarropas"]];
+const TECH_FIELDS=[
+ ["sumType","Tipo Suministro"],
+ ["epecFeat","Factibilidad EPEC"],
+ ["pillarLoc","Ubicación Pilar"],
+ ["distPillar","Distancia Pilar-Tablero (m)"],
+ ["soilRes","Resistividad Suelo (Ω·m)"]
+];
+const FLD=[["techo","Bocas luz techo"],["pared","Bocas luz pared"],["tomas","Tomas (TUG)"],["aa","Aires acond."],["lav","Lavarropas"],["modPuntos","Módulos Puntos"],["modTomas","Módulos Tomas"],["tapas","Tapas Cajas"],["cajasOct","Cajas Octogonales"]];
+
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+ document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x==b));
+ ["a","b","c","d","e"].forEach(i=>{$("#"+i).hidden=i!=b.dataset.t;});
+ if(b.dataset.t=="c") { calc(); }
+ if(b.dataset.t=="d") { renderComputo(); }
+});
+
+function form(){
+ $("#gen").innerHTML=GEN.map(([k,l])=>`<div><label>${l}</label><input type=text data-g="${k}" value="${S[k]}"></div>`).join("");
+ $("#tech-params").innerHTML=TECH_FIELDS.map(([k,l])=>`<div><label>${l}</label><input type=text data-tp="${k}" value="${S[k]}"></div>`).join("");
+ $("#fl").innerHTML=S.floors.map((f,i)=>`<div class=card><div style="display:flex;gap:8px"><input data-n="${i}" value="${f.name}"><button class=btn data-d="${i}">✕</button></div><div class=grid style="margin-top:8px">${FLD.map(([k,l])=>`<div><label>${l}</label><input type=number min=0 data-i="${i}" data-k="${k}" value="${f[k]}"></div>`).join("")}</div>${f.nota?`<div class=mu style="margin-top:6px">IA: ${f.nota}</div>`:""}</div>`).join("");
+ 
+ document.querySelectorAll("[data-g]").forEach(e=>{e.oninput=()=>{S[e.dataset.g]=e.value;};});
+ document.querySelectorAll("[data-tp]").forEach(e=>{e.oninput=()=>{S[e.dataset.tp]=e.value;};});
+ document.querySelectorAll("[data-i]").forEach(e=>{e.oninput=()=>{S.floors[e.dataset.i][e.dataset.k]=+e.value;};});
+ document.querySelectorAll("[data-n]").forEach(e=>{e.oninput=()=>{S.floors[e.dataset.n].name=e.value;};});
+ document.querySelectorAll("[data-d]").forEach(e=>{e.onclick=()=>{S.floors.splice(e.dataset.d,1);form();};});
+}
+$("#addf").onclick=()=>{
+ S.floors.push({name:"Planta "+(S.floors.length+1),techo:0,pared:0,tomas:0,aa:0,lav:0,otros:0,otrosW:0,modPuntos:0,modTomas:0,tapas:0,cajasOct:0});
+ form();
+};
+form();
+
+// ---- Lector PDF & IA ----
+let imgs=[],txt="";
+pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+$("#f").onchange=async e=>{
+ imgs=[];txt="";$("#pv").innerHTML="";$("#st").textContent="Leyendo PDF…";
+ try{
+  for(const file of e.target.files){
+   const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+   for(let p=1;p<=Math.min(pdf.numPages,3);p++){
+    const pg=await pdf.getPage(p),vp0=pg.getViewport({scale:1}),sc=1500/Math.max(vp0.width,vp0.height),vp=pg.getViewport({scale:sc});
+    const c=document.createElement("canvas");c.width=vp.width;c.height=vp.height;
+    await pg.render({canvasContext:c.getContext("2d"),viewport:vp}).promise;
+    $("#pv").appendChild(c);imgs.push({name:file.name,blob:await new Promise(r=>c.toBlob(r,"image/jpeg",.85))});
+    try{txt+=`\n[${file.name} p${p}] `+(await pg.getTextContent()).items.map(i=>i.str).join(" ");}catch(_){}
+   }
+  }
+  $("#st").textContent=imgs.length+" página(s) lista(s).";$("#go").disabled=!imgs.length;
+ }catch(err){$("#st").textContent="Error leyendo PDF: "+err.message;}
+};
+
+$("#go").onclick=async()=>{
+ if(!AppState.api){alert("Por favor ingresa tu API Key de Gemini en la pestaña 1.");return;}
+ $("#go").disabled=true;
+ $("#st").textContent="";
+ 
+ const progContainer = $("#ai-progress-container");
+ const progBar = $("#ai-prog-bar");
+ const progPct = $("#ai-prog-pct");
+ const progText = $("#ai-prog-text");
+ progContainer.style.display = "block";
+ progBar.style.width = "20%";
+ progPct.textContent = "20%";
+ progText.textContent = "Preparando imágenes y codificación...";
+
+ try {
+  const base64Images = await Promise.all(imgs.map((img, idx) => new Promise((resolve) => {
+   const reader = new FileReader();
+   progBar.style.width = `${Math.min(20 + Math.round((idx+1)/imgs.length * 30), 50)}%`;
+   progPct.textContent = `${progBar.style.width}`;
+   progText.textContent = `Procesando página ${idx+1} de ${imgs.length}...`;
+   reader.onloadend = () => { resolve(reader.result.split(',')[1]); };
+   reader.readAsDataURL(img.blob);
+  })));
+
+  progBar.style.width = "60%";
+  progPct.textContent = "60%";
+  progText.textContent = "Enviando solicitud a la IA de Gemini...";
+
+  const promptText = `Sos un proyectista electricista experto en la reglamentación AEA 90364-7-770 y Ley Provincial 10.281 (Córdoba). Analizá los planos provistos de una vivienda y contabilizá por planta:
+- techo: bocas de luz en techo (centros)
+- pared: apliques o bocas de luz en pared
+- tomas: tomacorrientes generales (TUG)
+- aa: equipos de aire acondicionado (AAc)
+- lav: lavarropas
+- modPuntos: cantidad de módulos de puntos/llaves
+- modTomas: cantidad de módulos de tomacorrientes
+- tapas: cantidad de tapas para cajas rectangulares/octogonales
+- cajasOct: cantidad de cajas octogonales de paso y derivación
+Devolvé EXCLUSIVAMENTE un objeto JSON válido con este formato exacto:
+{"floors":[{"name":"Planta Baja","techo":0,"pared":0,"tomas":0,"aa":0,"lav":0,"otros":0,"otrosW":0,"modPuntos":0,"modTomas":0,"tapas":0,"cajasOct":0,"nota":"..."}]}
+Indicaciones del usuario: ${$("#hint").value||"Ninguna"}`;
+
+  const payload = {
+   contents: [{
+    parts: [
+     { text: promptText },
+     ...base64Images.map(b64 => ({ inline_data: { mime_type: "image/jpeg", data: b64 } }))
+    ]
+   }]
+  };
+
+  progBar.style.width = "80%";
+  progPct.textContent = "80%";
+  progText.textContent = "Interpretando esquema y contabilizando elementos...";
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${AppState.api}`, {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+  const jsonClean = rawText.replace(/```json/g,"").replace(/```/g,"").trim();
+  const parsed = JSON.parse(jsonClean);
+
+  progBar.style.width = "100%";
+  progPct.textContent = "100%";
+  progText.textContent = "¡Análisis finalizado con éxito!";
+
+  if(parsed && parsed.floors){
+   S.floors = parsed.floors.map(f=>({
+    name: f.name || "Planta",
+    techo: +f.techo||0,
+    pared: +f.pared||0,
+    tomas: +f.tomas||0,
+    aa: +f.aa||0,
+    lav: +f.lav||0,
+    otros: +f.otros||0,
+    otrosW: +f.otrosW||0,
+    modPuntos: +f.modPuntos||(f.techo+f.pared),
+    modTomas: +f.modTomas||f.tomas,
+    tapas: +f.tapas||(f.techo+f.tomas),
+    cajasOct: +f.cajasOct||f.techo,
+    nota: f.nota || ""
+   }));
+   form();
+   $("#st").textContent="¡Análisis completado!";
+   setTimeout(()=>{ progContainer.style.display = "none"; document.querySelector('[data-t=b]').click(); }, 800);
+  }
+ } catch(e) {
+  progContainer.style.display = "none";
+  $("#st").textContent="Error en el análisis de IA: " + e.message;
+ }
+ $("#go").disabled=false;
+};
+
+// ---- Motor de Cálculo & Esquema Unifilar (Pestaña 3) ----
+const STD=[10,16,20,25,32,40,50,63,80,100],SEC=[[1.5,15],[2.5,21],[4,28],[6,36],[10,50],[16,68],[25,89],[35,111]];
+const brk=I=>STD.find(b=>b>=I)||100,secB=B=>(SEC.find(s=>s[1]>=B)||SEC[7])[0];
+const COL={IUG:"var(--il)",TUG:"var(--tg)",AA:"var(--aa)",LAV:"var(--lv)",TUE:"var(--ot)"};
+function split(n,m){const k=Math.ceil(n/m),r=[];for(let i=0;i<k;i++)r.push(Math.floor(n/k)+(i<n%k?1:0));return r;}
+
+function circuits(){
+ let n=0;
+ return S.floors.map(f=>{
+  const c=[], add=(t,d,q,W,B,s)=>c.push({id:"C"+(++n),t,d,q,W,I:W/S.V,B,s});
+  split(f.techo+f.pared,15).forEach(q=>q&&add("IUG","Iluminación "+f.name,q+" bocas",q*S.wl,10,1.5));
+  split(f.tomas,15).forEach(q=>q&&add("TUG","Tomas generales "+f.name,q+" bocas",2200,16,2.5));
+  for(let i=1;i<=f.aa;i++)add("AA",`Aire acond. ${f.name} ${i}`,"1",S.aaW,20,4);
+  for(let i=0;i<f.lav;i++)add("LAV","Lavarropas "+f.name,"1",S.lavW,16,2.5);
+  for(let i=1;i<=f.otros;i++){const B=Math.max(16,brk(f.otrosW/S.V*1.25));add("TUE",`Otro TUE ${f.name} ${i}`,"1",f.otrosW,B,Math.max(2.5,secB(B)));}
+  return {f,c};
+ });
+}
+
+const dem=c=>c.reduce((a,x)=>a+(x.t=="IUG"||x.t=="TUG"?.7:1)*x.W,0);
+
+function calc(){
+ const F=circuits(), tot=F.reduce((a,x)=>a+x.c.reduce((b,y)=>b+y.W,0),0), D=F.reduce((a,x)=>a+dem(x.c),0), Ib=D/S.V, IG=brk(Ib);
+ const pa=F.slice(1).reduce((a,x)=>a+dem(x.c),0), Ipa=pa/S.V, Bpa=brk(Ipa), Spa=Math.max(6,secB(Bpa)), dU=2*S.L*Ipa*.0225/Spa/S.V*100;
+ 
+ let h=`<div class=card><h2>ESQUEMA UNIFILAR Y CUADRO ELÉCTRICO</h2>
+ <div class="mu">Vivienda analizada (${S.area} m²) · Potencia Instalada: <b>${tot.toLocaleString("es-AR")} W</b> · Demanda estimada (coef. simultaneidad): <b>${Math.round(D).toLocaleString("es-AR")} W (${Ib.toFixed(1)} A)</b></div>
+ <div style="margin-top:6px;">Interruptor General: <b>2P - ${IG} A</b> | Diferencial: <b>30 mA - 2P</b></div></div>`;
+ h+=`<h2>Esquema Unifilar Principal</h2><div class="card sc">${svg(F,IG,Bpa,Spa)}</div>`;
+
+ h+=`<h2>Cuadro de Circuitos y Potencias</h2><div class="card sc"><table><tr><th>N°<th>Descripción<th>Cant<th>Pot. Unit. (W)<th>Pot. Total (W)<th>Corriente (A)<th>Protección<th>Cable</tr>`;
+ F.forEach(x=>{
+  x.c.forEach(y=>h+=`<tr><td><b>${y.id}</b><td><span class=pill style="background:${COL[y.t]}"></span>${y.d}<td>${y.q}<td>${y.W/parseInt(y.q||1)}<td><b>${y.W}</b><td>${y.I.toFixed(1)} A<td>${y.B} A<td>${y.s} mm²</tr>`);
+ });
+ h+=`</table></div>`;
+
+ h+=`<div class=card><h3>Notas Importantes y Cumplimiento (Ley Prov. 10.281)</h3>
+ <ol class="mu" style="padding-left:18px; margin:0; line-height:1.6;">
+  <li>La potencia de los aires acondicionados (${S.aaW} W c/u) es estimada. Verificar placa de cada equipo.</li>
+  <li>La demanda final se calculó según AEA 90364-7-770 con coeficientes de simultaneidad.</li>
+  <li>Secciones y protecciones definitivas sujetas al método de instalación y agrupamiento en obra.</li>
+  <li><b>Instalación obligatoria a ser ejecutada por Instalador Electricista Habilitado</b> y certificada ante ERSeP según Ley Provincial 10.281.</li>
+ </ol></div>`;
+ 
+ $("#res").innerHTML=h;
+}
+
+function svg(F,IG,Bpa,Spa){
+ const cw=74,gap=24,ws=F.map(x=>Math.max(x.c.length*cw+20,200)),W=ws.reduce((a,b)=>a+b,0)+gap*(F.length-1)+20,H=470;
+ let o=`<svg viewBox="0 0 ${W} ${H}" width="${Math.max(W,600)}" font-family="system-ui" font-size="10" fill="var(--fg)" stroke="var(--fg)" stroke-width="1.3">`;
+ const cx=W/2,bx=(r,y,w,h,t,s)=>`<rect x="${r}" y="${y}" width="${w}" height="${h}" rx="5" fill="var(--card)"/><text x="${r+w/2}" y="${y+14}" text-anchor="middle" stroke="none" font-weight="600">${t}</text>${s?`<text x="${r+w/2}" y="${y+27}" text-anchor="middle" stroke="none">${s}</text>`:""}`;
+ 
+ o+=bx(cx-50,8,100,32,"Medidor",S.V+" V~")+`<path d="M${cx} 40V55"/>`+bx(cx-60,55,120,32,"Interruptor General","2P – "+IG+" A")+`<path d="M${cx} 87V100"/>`+bx(cx-60,100,120,32,"Diferencial","30 mA – 2P")+`<path d="M${cx} 132V150"/>`;
+ 
+ let x0=10;const mid=[];F.forEach((x,i)=>{mid.push(x0+ws[i]/2);x0+=ws[i]+gap;});
+ o+=`<path d="M${mid[0]} 150H${mid[mid.length-1]}"/>`;
+ 
+ x0=10;F.forEach((x,i)=>{const w=ws[i],m=mid[i];
+  o+=`<path d="M${m} 150V165"/><rect x="${x0}" y="165" width="${w}" height="${H-175}" rx="8" fill="none" stroke="var(--ac)" stroke-width="1.6"/><text x="${x0+w/2}" y="182" text-anchor="middle" stroke="none" font-weight="700">TABLERO ${i?"SECCIONAL":"GENERAL"} – ${x.f.name.toUpperCase()}</text>`;
+  const sx=x0+(w-x.c.length*cw)/2;o+=`<path d="M${sx+cw/2-20} 205H${sx+x.c.length*cw-cw/2+20}"/>`;
+  
+  x.c.forEach((y,j)=>{const px=sx+j*cw+cw/2,cl=COL[y.t];
+   o+=`<path d="M${px} 205V222l-6 14M${px} 236V262" /><text x="${px}" y="218" text-anchor="middle" stroke="none" font-weight="600">${y.id}</text><text x="${px+9}" y="240" stroke="none">${y.B} A</text><path d="M${px} 262V300" stroke="${cl}" stroke-width="3"/><circle cx="${px}" cy="315" r="14" fill="${cl}" stroke="none" opacity=".9"/><text x="${px}" y="319" text-anchor="middle" stroke="none" fill="#fff" font-weight="700">${{IUG:"L",TUG:"T",AA:"AA",LAV:"LV",TUE:"E"}[y.t]}</text>`;
+   o+=`<text x="${px}" y="345" text-anchor="middle" stroke="none">${y.d.split(" "+x.f.name)[0].slice(0,13)}</text><text x="${px}" y="358" text-anchor="middle" stroke="none">${y.q}</text><text x="${px}" y="371" text-anchor="middle" stroke="none">${y.s} mm²</text><text x="${px}" y="384" text-anchor="middle" stroke="none">${y.W} W</text>`;
+  });
+  x0+=w+gap;
+ });
+
+ if(F.length>1)o+=`<text x="${(mid[0]+mid[1])/2}" y="${H-8}" text-anchor="middle" stroke="none" fill="var(--ac)" font-weight="700">Alimentador a ${F[1].f.name}: ${S.L} m – Cu ${Spa} mm² – ${Bpa} A (F+N+PE)</text>`;
+ return o+"</svg>";
+}
+
+// ---- Cómputo Materiales & Mano de Obra (Pestaña 4) ----
+let currentMaterials = [];
+let currentLabor = [];
+
+function computeData(){
+ let totalIUGbocas = 0, totalTUGbocas = 0, totalAA = 0, totalLav = 0;
+ let modPuntos = 0, modTomas = 0, tapasTot = 0, cajasOctTot = 0, totalBocas = 0;
+
+ S.floors.forEach(f=>{
+  totalIUGbocas += (f.techo + f.pared);
+  totalTUGbocas += f.tomas;
+  totalAA += f.aa;
+  totalLav += f.lav;
+  modPuntos += (f.modPuntos || (f.techo + f.pared));
+  modTomas += (f.modTomas || f.tomas);
+  tapasTot += (f.tapas || (f.techo + f.tomas));
+  cajasOctTot += (f.cajasOct || f.techo);
+ });
+ totalBocas = totalIUGbocas + totalTUGbocas + (totalAA*2) + totalLav;
+
+ const hPlanta = 3.0;
+ const m15 = Math.round((totalIUGbocas * (2.5 + hPlanta) * 3) * 1.1);
+ const m25 = Math.round(((totalTUGbocas * (3 + hPlanta) * 3) + (totalLav * 15)) * 1.1);
+ const m4 = Math.round((totalAA * 25 * 3) * 1.1);
+ const m6 = Math.round(((S.L * 3) + 6) * 1.1);
+
+ currentMaterials = [
+  { item: "Cable unipolar Cobre IRAM NM 247-3 (1.5 mm²)", desc: "Iluminación", commUnit: "Rollo 100m", commQty: Math.ceil(m15/100), unitPrice: 32000 },
+  { item: "Cable unipolar Cobre IRAM NM 247-3 (2.5 mm²)", desc: "Tomas y Lavarropas", commUnit: "Rollo 100m", commQty: Math.ceil(m25/100), unitPrice: 48000 },
+  { item: "Cable unipolar Cobre IRAM NM 247-3 (4.0 mm²)", desc: "Aires Acondicionados", commUnit: "Rollo 100m", commQty: Math.ceil(m4/100), unitPrice: 75000 },
+  { item: "Cable unipolar Cobre IRAM NM 247-3 (6.0 mm²)", desc: "Alimentadores / PAT", commUnit: "Rollo 100m", commQty: Math.ceil(m6/100), unitPrice: 110000 },
+  { item: "Caño corrugado ignífugo IRAM 62386 (Ø 20 mm)", desc: "Canalización embutida", commUnit: "Tira 25m", commQty: Math.ceil((m15+m25)*0.8 / 25), unitPrice: 12000 },
+  { item: "Caño corrugado ignífugo IRAM 62386 (Ø 25 mm)", desc: "Canalización pesada", commUnit: "Tira 25m", commQty: Math.ceil((m4+m6)*0.6 / 25), unitPrice: 16500 },
+  { item: "Cajas octogonales plásticas IRAM (Paso/Derivación)", desc: "Derivación techo/pared", commUnit: "Unidad", commQty: cajasOctTot, unitPrice: 1200 },
+  { item: "Cajas rectangulares plásticas IRAM 10x5", desc: "Puntos y tomas", commUnit: "Unidad", commQty: modPuntos + modTomas, unitPrice: 1100 },
+  { item: "Módulos tomacorriente 2P+T 10A / 20A IRAM", desc: "Instalación tomas", commUnit: "Unidad", commQty: modTomas, unitPrice: 2400 },
+  { item: "Módulos interruptores de punto / combinaciones", desc: "Iluminación", commUnit: "Unidad", commQty: modPuntos, unitPrice: 2200 },
+  { item: "Tapas armadas completas (bastidor + módulos + tapa)", desc: "Terminación tableros/ambientes", commUnit: "Unidad", commQty: tapasTot, unitPrice: 4500 },
+  { item: "Jabalina Copperweld IRAM 2309 (1/2\" x 1.5 m)", desc: "Puesta a tierra PAT", commUnit: "Unidad", commQty: 1, unitPrice: 28000 },
+  { item: "Caja de inspección PAT PVC con tapa transitable", desc: "Protección jabalina", commUnit: "Unidad", commQty: 1, unitPrice: 15000 },
+  { item: "Tablero de embutir IP43 (T General / Seccional)", desc: "Gabinete termomagnéticas", commUnit: "Unidad", commQty: 2, unitPrice: 22000 },
+  { item: "Interruptor Diferencial 2P 40A 30mA IRAM", desc: "Protección diferencial", commUnit: "Unidad", commQty: 2, unitPrice: 38000 }
+ ];
+
+ currentLabor = [
+  { tarea: "Visita de inspección y relevamiento técnico", unidad: "Por visita", qty: 1, unitPrice: 48400 },
+  { tarea: "Armado de pilar de obra Monofásico (ERSeP)", unidad: "Por pilar", qty: 1, unitPrice: 212960 },
+  { tarea: "Armado de losa por boca", unidad: "Por boca", qty: totalIUGbocas, unitPrice: 36300 },
+  { tarea: "Cableado de bocas (incluye portalámpara/efecto)", unidad: "Por boca", qty: totalBocas, unitPrice: 22385 },
+  { tarea: "Certificación y carpeta técnica (Vivienda hasta 20 bocas)", unidad: "Hasta 20 bocas", qty: 1, unitPrice: 324280 },
+  { tarea: "Certificación de vivienda (> 20 bocas adicionales)", unidad: "Por boca adic.", qty: Math.max(0, totalBocas - 20), unitPrice: 14520 },
+  { tarea: "Armado de tablero monofásico por protección", unidad: "Por protección", qty: 4, unitPrice: 61710 },
+  { tarea: "Colocación dispersor PAT (Jabalina + caja)", unidad: "Por instalación", qty: 1, unitPrice: 96800 },
+  { tarea: "Colocación artefacto iluminación (Hasta 3 m)", unidad: "Por artefacto", qty: totalIUGbocas, unitPrice: 17545 }
+ ];
+}
+
+function renderComputo(){
+ computeData();
+ let html = `<h3 style="margin-top:0;">A) Cómputo de Materiales (Normas IRAM)</h3>`;
+ html += `<table style="width:100%; border:1px solid #323c4c; background:var(--card);">`;
+ html += `<thead><tr style="background:#222a38;"><th style="color:#fff;">Material / Norma</th><th style="color:#fff;">Descripción</th><th style="color:#fff;">Unidad</th><th style="color:#fff;">Cant.</th><th style="color:#fff;">Precio Unit. ($)</th><th style="color:#fff;">Subtotal ($)</th></tr></thead><tbody>`;
+ 
+ let totalMat = 0;
+ currentMaterials.forEach((m, idx)=>{
+  const sub = m.commQty * m.unitPrice;
+  totalMat += sub;
+  html += `<tr>
+   <td><b>${m.item}</b></td><td>${m.desc}</td><td>${m.commUnit}</td>
+   <td><input type="number" min="1" value="${m.commQty}" data-mat-qty="${idx}" style="width:70px; padding:2px 4px;"></td>
+   <td><input type="number" min="0" value="${m.unitPrice}" data-mat-price="${idx}" style="width:100px; padding:2px 4px;"></td>
+   <td><b>$ <span id="mat-sub-${idx}">${sub.toLocaleString("es-AR")}</span></b></td>
+  </tr>`;
+ });
+ html += `</tbody></table>`;
+ html += `<div style="margin-top:6px; text-align:right;"><b>Subtotal Materiales: $ <span id="tot-mat">${totalMat.toLocaleString("es-AR")}</span>.-</b></div>`;
+
+ html += `<h3 style="margin-top:16px;">B) Costos de Mano de Obra ("El Electro Instalador Córdoba" - IVA incl.)</h3>`;
+ html += `<table style="width:100%; border:1px solid #323c4c; background:var(--card);">`;
+ html += `<thead><tr style="background:#222a38;"><th style="color:#fff;">Tarea / Servicio</th><th style="color:#fff;">Unidad</th><th style="color:#fff;">Cant.</th><th style="color:#fff;">Precio Unit. c/IVA ($)</th><th style="color:#fff;">Subtotal ($)</th></tr></thead><tbody>`;
+
+ let totalLab = 0;
+ currentLabor.forEach((l, idx)=>{
+  const sub = l.qty * l.unitPrice;
+  totalLab += sub;
+  html += `<tr>
+   <td><b>${l.tarea}</b></td><td>${l.unidad}</td>
+   <td><input type="number" min="0" value="${l.qty}" data-lab-qty="${idx}" style="width:70px; padding:2px 4px;"></td>
+   <td><input type="number" min="0" value="${l.unitPrice}" data-lab-price="${idx}" style="width:100px; padding:2px 4px;"></td>
+   <td><b>$ <span id="lab-sub-${idx}">${sub.toLocaleString("es-AR")}</span></b></td>
+  </tr>`;
+ });
+ html += `</tbody></table>`;
+ html += `<div style="margin-top:6px; text-align:right;"><b>Subtotal Mano de Obra: $ <span id="tot-lab">${totalLab.toLocaleString("es-AR")}</span>.-</b></div>`;
+
+ const granTotal = totalMat + totalLab;
+ html += `<div class="card" style="margin-top:16px; text-align:right; font-size:17px; background:#1b222d; border-color:var(--ac);"><b>PRESUPUESTO GENERAL ESTIMADO (Materiales + Mano de Obra): $ <span id="gran-total">${granTotal.toLocaleString("es-AR")}</span>.-</b></div>`;
+ 
+ $("#comp-res").innerHTML = html;
+
+ // Event listeners editables
+ document.querySelectorAll("[data-mat-qty]").forEach(inp=>{
+  inp.oninput = (e)=>{ const i = e.target.dataset.matQty; currentMaterials[i].commQty = +e.target.value; updateAllTotals(); };
+ });
+ document.querySelectorAll("[data-mat-price]").forEach(inp=>{
+  inp.oninput = (e)=>{ const i = e.target.dataset.matPrice; currentMaterials[i].unitPrice = +e.target.value; updateAllTotals(); };
+ });
+ document.querySelectorAll("[data-lab-qty]").forEach(inp=>{
+  inp.oninput = (e)=>{ const i = e.target.dataset.labQty; currentLabor[i].qty = +e.target.value; updateAllTotals(); };
+ });
+ document.querySelectorAll("[data-lab-price]").forEach(inp=>{
+  inp.oninput = (e)=>{ const i = e.target.dataset.labPrice; currentLabor[i].unitPrice = +e.target.value; updateAllTotals(); };
+ });
+}
+
+function updateAllTotals(){
+ let tMat = 0;
+ currentMaterials.forEach((m, idx)=>{
+  const sub = m.commQty * m.unitPrice;
+  const span = document.getElementById(`mat-sub-${idx}`);
+  if(span) span.textContent = sub.toLocaleString("es-AR");
+  tMat += sub;
+ });
+ const spanMat = document.getElementById("tot-mat");
+ if(spanMat) spanMat.textContent = tMat.toLocaleString("es-AR");
+
+ let tLab = 0;
+ currentLabor.forEach((l, idx)=>{
+  const sub = l.qty * l.unitPrice;
+  const span = document.getElementById(`lab-sub-${idx}`);
+  if(span) span.textContent = sub.toLocaleString("es-AR");
+  tLab += sub;
+ });
+ const spanLab = document.getElementById("tot-lab");
+ if(spanLab) spanLab.textContent = tLab.toLocaleString("es-AR");
+
+ const granTot = tMat + tLab;
+ const spanGran = document.getElementById("gran-total");
+ if(spanGran) spanGran.textContent = granTot.toLocaleString("es-AR");
+}
+
+$("#fetch-prices").onclick = async()=>{
+ if(!AppState.api){alert("Por favor ingresa tu API Key de Gemini en la pestaña 1.");return;}
+ $("#fetch-prices").disabled = true;
+ $("#fetch-prices").textContent = "Buscando en la Web...";
+
+ try {
+  const promptText = `Buscá precios promedio actuales en el mercado argentino (Easy o Mercado Libre Argentina) para rollos de cable unipolar IRAM de 1.5mm2 (100m), 2.5mm2 (100m), 4mm2 (100m), jabalina 1.5m y diferencial 40A. Devolvé un objeto JSON con estimaciones numéricas exactas ej: {"c15": 32000, "c25": 48000, "c4": 75000, "jabalina": 28000, "dif": 38000}`;
+  
+  const payload = { contents: [{ parts: [{ text: promptText }] }] };
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${AppState.api}`, {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+  const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+  const jsonClean = rawText.replace(/```json/g,"").replace(/```/g,"").trim();
+  const prices = JSON.parse(jsonClean);
+
+  if(prices.c15) currentMaterials[0].unitPrice = prices.c15;
+  if(prices.c25) currentMaterials[1].unitPrice = prices.c25;
+  if(prices.c4) currentMaterials[2].unitPrice = prices.c4;
+  if(prices.jabalina) currentMaterials[11].unitPrice = prices.jabalina;
+  if(prices.dif) currentMaterials[14].unitPrice = prices.dif;
+
+  renderComputo();
+  alert("¡Precios actualizados con referencias web!");
+ } catch(e){
+  alert("No se pudieron extraer precios automáticos de la web. Se mantienen valores base editables.");
+ }
+ $("#fetch-prices").disabled = false;
+ $("#fetch-prices").textContent = "🔍 Buscar Precios Web";
+};
+</script></body></html>
