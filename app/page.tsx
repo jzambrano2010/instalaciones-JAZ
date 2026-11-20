@@ -783,7 +783,12 @@ export default function Home() {
             onPrintTab={handlePrintTab}
           />
           <div className="mt-3">
-            <UnifilarDiagram key={resetKey} params={params} floors={floors} />
+            <UnifilarDiagram
+              key={resetKey}
+              params={params}
+              floors={floors}
+              onUpdateParams={setParams}
+            />
           </div>
         </div>
 

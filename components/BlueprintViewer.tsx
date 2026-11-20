@@ -49,6 +49,10 @@ export default function BlueprintViewer({
   const [analysisProgress, setAnalysisProgress] = useState<number>(0);
   const [analysisStatusText, setAnalysisStatusText] = useState<string>('');
   const [userHint, setUserHint] = useState<string>('');
+  const [viewerFeedback, setViewerFeedback] = useState<{
+    type: 'error' | 'success' | 'info';
+    message: string;
+  } | null>(null);
 
   // Active Tool state
   // 'pan' | 'calibrate' | 'measure-dist' | 'measure-area' | 'add-component' | 'zoom-window'
@@ -194,7 +198,10 @@ export default function BlueprintViewer({
           }
         } catch (err: any) {
           console.error('Error rendering PDF:', err);
-          alert(`Error procesando archivo PDF: ${err.message}. Verificá que el archivo no esté protegido con contraseña.`);
+          setViewerFeedback({
+            type: 'error',
+            message: `Error procesando archivo PDF: ${err?.message || 'archivo no legible'}. Verificá que el PDF no esté protegido con contraseña.`,
+          });
         }
       } else {
         const dataUrl = await new Promise<string>((resolve) => {
@@ -207,6 +214,7 @@ export default function BlueprintViewer({
     }
 
     if (loaded.length > 0) {
+      setViewerFeedback(null);
       setUploadedFiles((prev) => [...prev, ...loaded]);
       setActivePageIndex(0);
     }
@@ -646,7 +654,10 @@ export default function BlueprintViewer({
   const applyCalibration = () => {
     const distanceM = parseFloat(calibrationInputMeters);
     if (isNaN(distanceM) || distanceM <= 0 || !calibration.pointA || !calibration.pointB) {
-      alert('Ingresá una distancia válida mayor a 0 metros.');
+      setViewerFeedback({
+        type: 'error',
+        message: 'Ingresá una distancia válida mayor a 0 metros para calibrar la escala.',
+      });
       return;
     }
 
@@ -663,6 +674,7 @@ export default function BlueprintViewer({
       isCalibrated: true,
     }));
 
+    setViewerFeedback(null);
     setShowCalibModal(false);
     setActiveTool('pan');
   };
@@ -670,40 +682,31 @@ export default function BlueprintViewer({
   // Trigger Gemini AI Blueprint Analysis
   const runAIAnalysis = async () => {
     if (uploadedFiles.length === 0) {
-      alert('Subí un plano en formato PDF, JPG o PNG antes de ejecutar el análisis IA.');
+      setViewerFeedback({
+        type: 'error',
+        message: 'Subí un plano en formato PDF, JPG o PNG antes de ejecutar el análisis con IA.',
+      });
       return;
     }
 
-    let customApiKey = typeof window !== 'undefined' ? localStorage.getItem('electroplan_custom_api_key') : null;
+    const customApiKey =
+      (typeof window !== 'undefined' ? localStorage.getItem('electroplan_custom_api_key') : '')?.trim() || '';
 
-    if (!customApiKey) {
-      const userKey = prompt(
-        '🔑 Clave API Key Personal Requerida:\n\n' +
-        'Cada cliente utiliza su propia clave API Key de Google Gemini para procesar sus planos de forma autónoma.\n\n' +
-        'Podés obtener tu clave gratuita en: https://aistudio.google.com/app/apikey\n\n' +
-        'Ingresá tu API Key de Gemini a continuación (o configurala en la Pestaña 6):'
-      );
-      if (!userKey || !userKey.trim()) {
-        alert('Análisis cancelado. Necesitás ingresar tu propia clave API Key de Gemini para utilizar las funciones de Inteligencia Artificial.');
-        return;
-      }
-      customApiKey = userKey.trim();
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('electroplan_custom_api_key', customApiKey);
-      }
-    }
-
+    setViewerFeedback(null);
     setIsAnalyzing(true);
     setAnalysisProgress(15);
     setAnalysisStatusText('Preparando plano y datos de escala calibrada...');
 
     try {
-      // Normalize uploaded images (PNG/JPG/PDF renders) to compressed JPEG max 1600px to avoid 413 HTML proxy errors
+      const pagesToSend = uploadedFiles.slice(0, 4);
+      const maxDim = pagesToSend.length > 2 ? 1200 : 1500;
+      const jpegQuality = pagesToSend.length > 2 ? 0.78 : 0.82;
+
+      // Normalize uploaded images (PNG/JPG/PDF renders) to compressed JPEG to keep request payload fast & under hosting limits
       const normalizeToJpegBase64 = (dataUrl: string): Promise<string> =>
         new Promise((resolve) => {
           const img = new Image();
           img.onload = () => {
-            const maxDim = 1600;
             const scale = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
             const canvas = document.createElement('canvas');
             canvas.width = Math.max(1, Math.round(img.width * scale));
@@ -713,7 +716,7 @@ export default function BlueprintViewer({
               ctx.fillStyle = '#ffffff';
               ctx.fillRect(0, 0, canvas.width, canvas.height);
               ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-              const out = canvas.toDataURL('image/jpeg', 0.84);
+              const out = canvas.toDataURL('image/jpeg', jpegQuality);
               resolve(out.split(',')[1] || '');
             } else {
               resolve(dataUrl.split(',')[1] || '');
@@ -723,15 +726,17 @@ export default function BlueprintViewer({
           img.src = dataUrl;
         });
 
-      const imagesBase64 = await Promise.all(uploadedFiles.slice(0, 4).map((f) => normalizeToJpegBase64(f.dataUrl)));
+      const imagesBase64 = await Promise.all(pagesToSend.map((f) => normalizeToJpegBase64(f.dataUrl)));
 
       setAnalysisProgress(45);
-      setAnalysisStatusText('Enviando imagen a Gemini con tu clave API Key personal...');
+      setAnalysisStatusText('Enviando plano a Gemini IA para análisis eléctrico y cómputo...');
 
       const reqHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
-        'x-gemini-api-key': customApiKey,
       };
+      if (customApiKey) {
+        reqHeaders['x-gemini-api-key'] = customApiKey;
+      }
 
       const result = await safeFetchJson('/api/gemini/analyze-blueprint', {
         method: 'POST',
@@ -751,7 +756,7 @@ export default function BlueprintViewer({
       setAnalysisProgress(80);
       setAnalysisStatusText('Interpretando bocas, cajas octogonales y largo de cañerías...');
 
-      if (data && data.floors && Array.isArray(data.floors)) {
+      if (data && data.floors && Array.isArray(data.floors) && data.floors.length > 0) {
         // Sanitize and ensure each floor has valid id and numeric types
         const sanitizedFloors: FloorData[] = data.floors.map((f: any, idx: number) => ({
           id: f.id || `f_ai_${idx + 1}_${Math.random().toString(36).substring(2, 7)}`,
@@ -778,17 +783,24 @@ export default function BlueprintViewer({
 
         setAnalysisProgress(100);
         setAnalysisStatusText('¡Análisis completado exitosamente!');
+        setViewerFeedback({
+          type: 'success',
+          message: `¡Análisis IA completado! Se detectaron ${sanitizedFloors.length} sector(es) / tablero(s) y se actualizaron los datos del proyecto.`,
+        });
 
         onUpdateFloors(sanitizedFloors);
         if (onAIAnalysisComplete) onAIAnalysisComplete({ ...data, floors: sanitizedFloors });
       } else {
-        throw new Error('La IA no devolvió un formato válido de plantas/floors.');
+        throw new Error('La IA no devolvió sectores ni bocas eléctricas válidas para el plano.');
       }
     } catch (err: any) {
       console.warn('AI Analysis failed:', err?.message || err);
       setAnalysisProgress(0);
       setAnalysisStatusText('Error en el proceso de análisis.');
-      alert(`Error en análisis de IA: ${err?.message || 'Verifique la clave API o la imagen del plano cargada.'}`);
+      setViewerFeedback({
+        type: 'error',
+        message: `Error en análisis de IA: ${err?.message || 'Verificá la imagen del plano cargada o la configuración de GEMINI_API_KEY en el servidor.'}`,
+      });
     } finally {
       setTimeout(() => {
         setIsAnalyzing(false);
@@ -1156,6 +1168,36 @@ export default function BlueprintViewer({
                 style={{ width: `${analysisProgress}%` }}
               />
             </div>
+          </div>
+        )}
+
+        {/* Inline Feedback Banner (works inside iframes without browser alert/prompt blockers) */}
+        {viewerFeedback && (
+          <div
+            className={`p-3 rounded-lg border text-xs flex items-start justify-between gap-3 ${
+              viewerFeedback.type === 'error'
+                ? 'bg-red-50 border-red-300 text-red-900'
+                : viewerFeedback.type === 'success'
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                : 'bg-blue-50 border-blue-300 text-blue-900'
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              {viewerFeedback.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+              )}
+              <span className="font-medium leading-relaxed">{viewerFeedback.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setViewerFeedback(null)}
+              className="text-xs font-bold opacity-70 hover:opacity-100 px-1.5"
+              aria-label="Cerrar aviso"
+            >
+              ✕
+            </button>
           </div>
         )}
       </div>

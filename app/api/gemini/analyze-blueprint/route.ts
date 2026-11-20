@@ -1,30 +1,69 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
 import { extractJsonFromModelText } from '@/lib/safe-json';
 
+export const maxDuration = 60;
+
+function isAuthKeyError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  const status = err?.status ?? err?.code;
+  return (
+    status === 401 ||
+    status === 403 ||
+    msg.includes('api_key_invalid') ||
+    msg.includes('api key not valid') ||
+    msg.includes('permission_denied') ||
+    msg.includes('unauthenticated')
+  );
+}
+
+function formatGeminiError(err: any): { status: number; message: string } {
+  const raw = String(err?.message || err || '');
+  const lower = raw.toLowerCase();
+  const code = Number(err?.status || err?.code || 0);
+
+  if (isAuthKeyError(err)) {
+    return {
+      status: 401,
+      message:
+        'Clave API de Google Gemini inválida o sin permisos. Si cargaste una clave personal en la Pestaña 6, borrala o actualizala; si ejecutás fuera de AI Studio, verificá GEMINI_API_KEY en las variables de entorno del servidor.',
+    };
+  }
+  if (code === 429 || lower.includes('quota') || lower.includes('resource_exhausted') || lower.includes('rate limit')) {
+    return {
+      status: 429,
+      message:
+        'Se alcanzó el límite temporal de consultas (cuota) de Google Gemini. Esperá unos segundos y volvé a intentarlo.',
+    };
+  }
+  if (code === 404 || lower.includes('not_found') || lower.includes('is not found for api version')) {
+    return {
+      status: 400,
+      message:
+        'El modelo de Gemini configurado no está habilitado para la API Key utilizada. Verificá los permisos de tu clave de Google AI Studio.',
+    };
+  }
+  return {
+    status: 500,
+    message: raw || 'Error analizando planos con IA',
+  };
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const customApiKey = req.headers.get('x-gemini-api-key');
-    const apiKeyToUse = customApiKey || process.env.GEMINI_API_KEY;
+    const customApiKey = (req.headers.get('x-gemini-api-key') || '').trim();
+    const serverApiKey = (process.env.GEMINI_API_KEY || '').trim();
+    const apiKeyToUse = customApiKey || serverApiKey;
 
     if (!apiKeyToUse) {
       return NextResponse.json(
         {
           error:
-            'Requisito de Clave Personal: Debés ingresar tu propia clave API Key de Google Gemini en la Pestaña 6 (Licencias y Configuración) para analizar el plano con IA.',
+            'No hay ninguna clave GEMINI_API_KEY configurada en el servidor ni en el navegador. Si desplegaste la app fuera de AI Studio (por ej. Vercel), configurá la variable de entorno GEMINI_API_KEY o ingresá tu clave personal en la Pestaña 6.',
         },
         { status: 400 }
       );
     }
-
-    const ai = new GoogleGenAI({
-      apiKey: apiKeyToUse,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
 
     const body = await req.json().catch(() => ({}));
     const { images, hint, pixelsPerMeter } = (body || {}) as {
@@ -38,7 +77,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Limit to max 4 images to prevent payload issues
-    const selectedImages = images.slice(0, 4);
+    const selectedImages = images
+      .slice(0, 4)
+      .filter((b64) => typeof b64 === 'string' && b64.trim().length > 0);
+
+    if (selectedImages.length === 0) {
+      return NextResponse.json({ error: 'Las imágenes del plano están vacías o corruptas.' }, { status: 400 });
+    }
 
     const imageParts = selectedImages.map((b64: string) => ({
       inlineData: {
@@ -77,77 +122,105 @@ IMPORTANTE: Si el plano distingue múltiples tableros seccionales (TS1, TS2, TS3
 
 Devolvé la respuesta estrictamente en formato JSON que cumpla con el esquema.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents: [
-        {
-          parts: [
-            { text: promptText },
-            ...imageParts,
-          ],
+    const executeAnalysis = async (key: string) => {
+      const ai = new GoogleGenAI({
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
         },
-      ],
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            floors: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  boardCode: { type: Type.STRING },
-                  colorTag: { type: Type.STRING },
-                  feederLengthM: { type: Type.NUMBER },
-                  techo: { type: Type.INTEGER },
-                  pared: { type: Type.INTEGER },
-                  tomas: { type: Type.INTEGER },
-                  aa: { type: Type.INTEGER },
-                  lav: { type: Type.INTEGER },
-                  otros: { type: Type.INTEGER },
-                  otrosW: { type: Type.INTEGER },
-                  modPuntos: { type: Type.INTEGER },
-                  modTomas: { type: Type.INTEGER },
-                  tapas: { type: Type.INTEGER },
-                  cajasOct: { type: Type.INTEGER },
-                  measuredAreaM2: { type: Type.NUMBER },
-                  estimatedConduitMeters: { type: Type.NUMBER },
-                  nota: { type: Type.STRING },
+      });
+
+      return ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: {
+          parts: [{ text: promptText }, ...imageParts],
+        },
+        config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              floors: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING },
+                    boardCode: { type: Type.STRING },
+                    colorTag: { type: Type.STRING },
+                    feederLengthM: { type: Type.NUMBER },
+                    techo: { type: Type.INTEGER },
+                    pared: { type: Type.INTEGER },
+                    tomas: { type: Type.INTEGER },
+                    aa: { type: Type.INTEGER },
+                    lav: { type: Type.INTEGER },
+                    otros: { type: Type.INTEGER },
+                    otrosW: { type: Type.INTEGER },
+                    modPuntos: { type: Type.INTEGER },
+                    modTomas: { type: Type.INTEGER },
+                    tapas: { type: Type.INTEGER },
+                    cajasOct: { type: Type.INTEGER },
+                    measuredAreaM2: { type: Type.NUMBER },
+                    estimatedConduitMeters: { type: Type.NUMBER },
+                    nota: { type: Type.STRING },
+                  },
+                  required: ['name', 'techo', 'pared', 'tomas', 'aa', 'lav'],
                 },
-                required: ['name', 'techo', 'pared', 'tomas', 'aa', 'lav'],
+              },
+              detectedComponentsSummary: {
+                type: Type.STRING,
+                description: 'Resumen ejecutivo de componentes eléctricos detectados',
+              },
+              recommendationAEA: {
+                type: Type.STRING,
+                description: 'Recomendación de grado de electrificación y tableros bajo norma AEA 770',
               },
             },
-            detectedComponentsSummary: {
-              type: Type.STRING,
-              description: 'Resumen ejecutivo de componentes eléctricos detectados',
-            },
-            recommendationAEA: {
-              type: Type.STRING,
-              description: 'Recomendación de grado de electrificación y tableros bajo norma AEA 770',
-            },
+            required: ['floors'],
           },
-          required: ['floors'],
         },
-      },
-    });
+      });
+    };
 
-    const data = extractJsonFromModelText<{ floors?: any[] }>(response.text, { floors: [] });
+    let response;
+    try {
+      response = await executeAnalysis(apiKeyToUse);
+    } catch (primaryErr: any) {
+      if (customApiKey && serverApiKey && customApiKey !== serverApiKey && isAuthKeyError(primaryErr)) {
+        console.warn('Custom Gemini API key rejected in analyze-blueprint, falling back to server GEMINI_API_KEY.');
+        response = await executeAnalysis(serverApiKey);
+      } else {
+        throw primaryErr;
+      }
+    }
+
+    const data = extractJsonFromModelText<{
+      floors?: any[];
+      detectedComponentsSummary?: string;
+      recommendationAEA?: string;
+    }>(response.text, { floors: [] });
+
     if (!data || !Array.isArray(data.floors) || data.floors.length === 0) {
+      const detail = data?.detectedComponentsSummary
+        ? ` Detalle detectado: ${data.detectedComponentsSummary}`
+        : '';
       return NextResponse.json(
-        { error: 'La IA no devolvió una estructura JSON válida para el plano.' },
-        { status: 502 }
+        {
+          error: `No se pudieron identificar ambientes ni bocas eléctricas en la imagen cargada.${detail} Verificá que el archivo sea un plano arquitectónico/eléctrico legible.`,
+        },
+        { status: 422 }
       );
     }
 
     return NextResponse.json(data);
   } catch (err: any) {
     console.error('Error in analyze-blueprint API:', err);
-    return NextResponse.json(
-      { error: err.message || 'Error analizando planos con IA' },
-      { status: 500 }
-    );
+    const formatted = formatGeminiError(err);
+    return NextResponse.json({ error: formatted.message }, { status: formatted.status });
   }
 }
+
 

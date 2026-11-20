@@ -114,7 +114,12 @@ export default function LoadReport({ params, floors }: LoadReportProps) {
   const demand = calculateDemand(allCircuits, params);
   const electrInfo = getElectrificationGrade(params.area);
   const sectionalBoards = calculateSectionalBoards(params, floorCircuits, demand.isThreePhase);
-  const phaseBalance = calculatePhaseBalance(allCircuits, sectionalBoards, demand.isThreePhase);
+  const phaseBalance = calculatePhaseBalance(
+    allCircuits,
+    sectionalBoards,
+    demand.isThreePhase,
+    params.phaseOverrides
+  );
   const directTceCircuits = allCircuits.filter(
     (c) => c.boardCode === 'TCE' || c.boardTarget === 'TP'
   );

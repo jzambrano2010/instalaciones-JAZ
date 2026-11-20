@@ -23,21 +23,126 @@ import {
   Cable,
   AlertTriangle,
 } from 'lucide-react';
+import PhaseBalanceBoard, { PhaseKey } from '@/components/PhaseBalanceBoard';
 
 interface UnifilarDiagramProps {
   params: TechnicalParams;
   floors: FloorData[];
+  onUpdateParams?: React.Dispatch<React.SetStateAction<TechnicalParams>>;
 }
 
-export default function UnifilarDiagram({ params, floors }: UnifilarDiagramProps) {
-  const floorCircuits = generateCircuits(params, floors);
+export default function UnifilarDiagram({
+  params,
+  floors,
+  onUpdateParams,
+}: UnifilarDiagramProps) {
+  const [localPhaseOverrides, setLocalPhaseOverrides] = useState<
+    Record<string, PhaseKey>
+  >({});
+  const [multifilarClickNotice, setMultifilarClickNotice] = useState<string | null>(
+    null
+  );
+
+  const effectiveOverrides = params.phaseOverrides ?? localPhaseOverrides;
+  const effectiveParams: TechnicalParams = params.phaseOverrides
+    ? params
+    : { ...params, phaseOverrides: effectiveOverrides };
+
+  const floorCircuits = generateCircuits(effectiveParams, floors);
   const allCircuits = floorCircuits.flatMap((fc) => fc.c);
-  const demand = calculateDemand(allCircuits, params);
-  const sectionalBoards = calculateSectionalBoards(params, floorCircuits, demand.isThreePhase);
-  const phaseBalance = calculatePhaseBalance(allCircuits, sectionalBoards, demand.isThreePhase);
+  const demand = calculateDemand(allCircuits, effectiveParams);
+  const sectionalBoards = calculateSectionalBoards(
+    effectiveParams,
+    floorCircuits,
+    demand.isThreePhase
+  );
+  const phaseBalance = calculatePhaseBalance(
+    allCircuits,
+    sectionalBoards,
+    demand.isThreePhase,
+    effectiveOverrides
+  );
   const threePhaseProjection = demand.isThreePhase
     ? phaseBalance
-    : calculatePhaseBalance(allCircuits, undefined, true);
+    : calculatePhaseBalance(allCircuits, undefined, true, effectiveOverrides);
+  const activeInteractiveBalance = demand.isThreePhase
+    ? phaseBalance
+    : threePhaseProjection;
+  const hasManualOverrides = Object.keys(effectiveOverrides || {}).length > 0;
+
+  const updatePhaseOverrides = (nextOverrides?: Record<string, PhaseKey>) => {
+    if (onUpdateParams) {
+      onUpdateParams((prev) => {
+        const updated = { ...prev };
+        if (!nextOverrides || Object.keys(nextOverrides).length === 0) {
+          delete updated.phaseOverrides;
+        } else {
+          updated.phaseOverrides = nextOverrides;
+        }
+        return updated;
+      });
+    } else {
+      setLocalPhaseOverrides(nextOverrides || {});
+    }
+  };
+
+  const handleAssignCircuitPhase = (circ: Circuit, targetPhase: PhaseKey) => {
+    // Snapshot all current single-phase circuit phases so non-dragged circuits stay put
+    const snapshot: Record<string, PhaseKey> = { ...effectiveOverrides };
+    allCircuits.forEach((c) => {
+      const curr = activeInteractiveBalance.circuitPhases[c.id];
+      if (curr === 'L1' || curr === 'L2' || curr === 'L3') {
+        if (!snapshot[c.id]) snapshot[c.id] = curr;
+      }
+    });
+
+    // If TCE is 3F and this circuit belongs to a 1-phase sectional board, move the whole 1F TS block together
+    const bCode = circ.boardCode || 'TS1';
+    const parentBoard = sectionalBoards.find((sb) => sb.boardCode === bCode);
+    if (demand.isThreePhase && parentBoard && !parentBoard.isThreePhase) {
+      snapshot[`__TS__${parentBoard.boardCode}`] = targetPhase;
+      parentBoard.circuits.forEach((c) => {
+        snapshot[c.id] = targetPhase;
+      });
+    } else {
+      snapshot[circ.id] = targetPhase;
+    }
+
+    setMultifilarClickNotice(null);
+    updatePhaseOverrides(snapshot);
+  };
+
+  const handleResetAutoBalance = () => {
+    setMultifilarClickNotice(null);
+    updatePhaseOverrides(undefined);
+  };
+
+  const handleSwitchToThreePhase = () => {
+    setMultifilarClickNotice(null);
+    if (onUpdateParams) {
+      onUpdateParams((prev) => ({
+        ...prev,
+        sumType: 'Trifásico (Más de 5kW - EPEC ET 22)',
+        V: 380,
+      }));
+    }
+  };
+
+  const handleQuickCyclePhaseInMultifilar = (circ: Circuit) => {
+    const { phaseName, isThreePhase } = getCircuitPhase(circ);
+    if (isThreePhase) return;
+
+    if (!demand.isThreePhase) {
+      setMultifilarClickNotice(
+        `El proyecto está en Monofásico 220V (todos los circuitos operan en L1). Activá Trifásico 380V para asignar ${circ.id} a L2/L3 en el Multifilar, o simulalo en el Tablero Interactivo inferior.`
+      );
+      return;
+    }
+
+    const nextPhase: PhaseKey =
+      phaseName === 'L1' ? 'L2' : phaseName === 'L2' ? 'L3' : 'L1';
+    handleAssignCircuitPhase(circ, nextPhase);
+  };
   const directTceCircuits = allCircuits.filter(
     (c) => c.boardCode === 'TCE' || c.boardTarget === 'TP'
   );
@@ -474,6 +579,47 @@ export default function UnifilarDiagram({ params, floors }: UnifilarDiagramProps
             </span>
           </div>
 
+          {/* Quick-Click Instruction Bar for Multifilar */}
+          <div className="bg-blue-50/80 border border-blue-200 rounded-lg px-3.5 py-2 text-xs text-blue-950 flex flex-wrap items-center justify-between gap-2 no-print">
+            <span>
+              <strong>Clic rápido en el Multifilar:</strong> hacé clic sobre cualquier interruptor (PIA) monofásico para rotar su fase (<strong>L1 → L2 → L3</strong>) en tiempo real, o arrastrá tarjetas en el <strong>Tablero Interactivo de Carga por Fase</strong> inferior.
+            </span>
+            {hasManualOverrides && (
+              <button
+                type="button"
+                onClick={handleResetAutoBalance}
+                className="px-2.5 py-1 bg-white hover:bg-slate-100 text-[#0f2b48] border border-blue-300 rounded font-bold text-[11px] transition-colors"
+              >
+                Restaurar auto-balance AEA
+              </button>
+            )}
+          </div>
+
+          {multifilarClickNotice && (
+            <div className="bg-amber-50 border border-amber-300 rounded-lg px-3.5 py-2.5 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2 no-print">
+              <span>{multifilarClickNotice}</span>
+              <div className="flex items-center gap-2">
+                {!demand.isThreePhase && onUpdateParams && (
+                  <button
+                    type="button"
+                    onClick={handleSwitchToThreePhase}
+                    className="px-2.5 py-1 bg-[#0f2b48] hover:bg-slate-900 text-white rounded font-bold text-[11px]"
+                  >
+                    Activar Trifásico 380V
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setMultifilarClickNotice(null)}
+                  className="text-amber-800 hover:text-amber-950 font-bold px-1"
+                  aria-label="Cerrar aviso"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="overflow-x-auto print:overflow-visible bg-slate-50 print:bg-white rounded-lg p-4 border border-slate-200 print:border-none">
             {(() => {
               const totalCircuits = orderedMultifilarCircuits.length;
@@ -642,26 +788,38 @@ export default function UnifilarDiagram({ params, floors }: UnifilarDiagramProps
                           </>
                         )}
 
-                        {/* Circuit Breaker Box */}
-                        <rect
-                          x={posX - 20}
-                          y="194"
-                          width="64"
-                          height="58"
-                          rx="6"
-                          fill="#ffffff"
-                          stroke={isThreePhase ? '#dc2626' : '#0f2b48'}
-                          strokeWidth="2"
-                        />
-                        <text x={posX + 12} y="211" fill="#0f2b48" fontSize="10.5" fontWeight="black" textAnchor="middle">
-                          {circ.id} · {bCode}
-                        </text>
-                        <text x={posX + 12} y="227" fill="#2563eb" fontSize="10" fontWeight="bold" textAnchor="middle">
-                          {polesLabel} {circ.B}A
-                        </text>
-                        <text x={posX + 12} y="243" fill={phaseColor} fontSize="9.5" fontWeight="extrabold" textAnchor="middle">
-                          {isThreePhase ? '3F R-S-T' : phaseName}
-                        </text>
+                        {/* Circuit Breaker Box (Quick-click to rotate phase L1 -> L2 -> L3) */}
+                        <g
+                          onClick={() => handleQuickCyclePhaseInMultifilar(circ)}
+                          className={isThreePhase ? 'cursor-default' : 'cursor-pointer group'}
+                          role={isThreePhase ? undefined : 'button'}
+                        >
+                          <title>
+                            {isThreePhase
+                              ? `${circ.id}: Carga trifásica equilibrada 3F (R-S-T)`
+                              : `${circ.id} (${phaseName}) — Clic para rotar fase (L1 → L2 → L3)`}
+                          </title>
+                          <rect
+                            x={posX - 20}
+                            y="194"
+                            width="64"
+                            height="58"
+                            rx="6"
+                            fill="#ffffff"
+                            stroke={isThreePhase ? '#dc2626' : phaseColor}
+                            strokeWidth="2.2"
+                            className={isThreePhase ? '' : 'transition-opacity group-hover:opacity-85'}
+                          />
+                          <text x={posX + 12} y="211" fill="#0f2b48" fontSize="10.5" fontWeight="black" textAnchor="middle">
+                            {circ.id} · {bCode}
+                          </text>
+                          <text x={posX + 12} y="227" fill="#2563eb" fontSize="10" fontWeight="bold" textAnchor="middle">
+                            {polesLabel} {circ.B}A
+                          </text>
+                          <text x={posX + 12} y="243" fill={phaseColor} fontSize="9.5" fontWeight="extrabold" textAnchor="middle">
+                            {isThreePhase ? '3F R-S-T' : `${phaseName} ↻`}
+                          </text>
+                        </g>
 
                         {/* Connection line down to Circuit Node */}
                         <line x1={posX + 12} y1="252" x2={posX + 12} y2="292" stroke={color} strokeWidth="4" />
@@ -1269,6 +1427,19 @@ export default function UnifilarDiagram({ params, floors }: UnifilarDiagramProps
           </table>
         </div>
       </div>
+
+      {/* 4A. Tablero Interactivo Drag & Drop de Carga por Fase (L1, L2, L3) */}
+      <PhaseBalanceBoard
+        circuits={allCircuits}
+        sectionalBoards={sectionalBoards}
+        activeBalance={activeInteractiveBalance}
+        isThreePhaseSupply={demand.isThreePhase}
+        hasManualOverrides={hasManualOverrides}
+        circuitColors={CIRCUIT_COLORS}
+        onAssignCircuitPhase={handleAssignCircuitPhase}
+        onResetAutoBalance={handleResetAutoBalance}
+        onSwitchToThreePhase={onUpdateParams ? handleSwitchToThreePhase : undefined}
+      />
 
       {/* 4B. Tabla Adicional de Balance de Fases (L1, L2, L3) y Desequilibrio Automático (< 15% AEA) */}
       <div className="bg-white border border-slate-300 rounded-xl p-5 shadow-sm space-y-3 avoid-break">

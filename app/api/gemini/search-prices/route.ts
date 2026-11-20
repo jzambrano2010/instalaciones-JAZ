@@ -1,30 +1,24 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
 import { extractJsonFromModelText } from '@/lib/safe-json';
 
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
   try {
-    const customApiKey = req.headers.get('x-gemini-api-key');
-    const apiKeyToUse = customApiKey || process.env.GEMINI_API_KEY;
+    const customApiKey = (req.headers.get('x-gemini-api-key') || '').trim();
+    const serverApiKey = (process.env.GEMINI_API_KEY || '').trim();
+    const apiKeyToUse = customApiKey || serverApiKey;
 
     if (!apiKeyToUse) {
       return NextResponse.json(
         {
           error:
-            'Requisito de Clave Personal: Debés ingresar tu propia clave API Key personal de Google Gemini en la Pestaña 6 (Licencias y Configuración) para buscar precios web.',
+            'No hay clave GEMINI_API_KEY configurada en el servidor ni en el navegador. Configurá GEMINI_API_KEY en tu hosting o ingresá tu clave personal en la Pestaña 6.',
         },
         { status: 400 }
       );
     }
-
-    const ai = new GoogleGenAI({
-      apiKey: apiKeyToUse,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
 
     const promptText = `Buscá estimaciones de precios de mercado actuales en Argentina (Mercado Libre Argentina / Easy / Distribuidores eléctricos) expresados en pesos argentinos ($ ARS) para los siguientes materiales de electricidad:
 - Rollo de 100m Cable unipolar IRAM 1.5mm2
@@ -37,25 +31,54 @@ export async function POST(req: NextRequest) {
 
 Devolvé únicamente un objeto JSON con el valor numérico exacto aproximado para cada ítem.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
-      contents: promptText,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            cable15: { type: Type.INTEGER },
-            cable25: { type: Type.INTEGER },
-            cable40: { type: Type.INTEGER },
-            cable60: { type: Type.INTEGER },
-            jabalina: { type: Type.INTEGER },
-            diferencial: { type: Type.INTEGER },
-            cano20: { type: Type.INTEGER },
+    const runQuery = async (key: string) => {
+      const ai = new GoogleGenAI({
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
           },
         },
-      },
-    });
+      });
+
+      return ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: promptText,
+        config: {
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              cable15: { type: Type.INTEGER },
+              cable25: { type: Type.INTEGER },
+              cable40: { type: Type.INTEGER },
+              cable60: { type: Type.INTEGER },
+              jabalina: { type: Type.INTEGER },
+              diferencial: { type: Type.INTEGER },
+              cano20: { type: Type.INTEGER },
+            },
+          },
+        },
+      });
+    };
+
+    let response;
+    try {
+      response = await runQuery(apiKeyToUse);
+    } catch (primaryErr: any) {
+      const msg = String(primaryErr?.message || '').toLowerCase();
+      if (
+        customApiKey &&
+        serverApiKey &&
+        customApiKey !== serverApiKey &&
+        (msg.includes('api_key_invalid') || msg.includes('api key not valid') || msg.includes('permission_denied'))
+      ) {
+        response = await runQuery(serverApiKey);
+      } else {
+        throw primaryErr;
+      }
+    }
 
     const data = extractJsonFromModelText(response.text, {});
 
@@ -68,3 +91,4 @@ Devolvé únicamente un objeto JSON con el valor numérico exacto aproximado par
     );
   }
 }
+

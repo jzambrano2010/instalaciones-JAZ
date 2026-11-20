@@ -1,11 +1,11 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(req: NextRequest) {
   try {
-    const customApiKey = req.headers.get('x-gemini-api-key');
+    const customApiKey = (req.headers.get('x-gemini-api-key') || '').trim();
     const { apiKey } = await req.json().catch(() => ({ apiKey: null }));
-    const keyToTest = apiKey || customApiKey || process.env.GEMINI_API_KEY;
+    const keyToTest = (typeof apiKey === 'string' ? apiKey.trim() : '') || customApiKey || (process.env.GEMINI_API_KEY || '').trim();
 
     if (!keyToTest) {
       return NextResponse.json(
@@ -23,10 +23,13 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Simple test call with flash model
+    // Simple fast test call
     const response = await ai.models.generateContent({
       model: 'gemini-4-hydrogen',
       contents: 'Respond ok',
+      config: {
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      },
     });
 
     if (response && response.text) {

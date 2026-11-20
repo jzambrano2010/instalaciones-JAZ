@@ -133,36 +133,18 @@ export default function BudgetTab({ params, floors, onImportProject }: BudgetTab
 
   // Web Price Search via Gemini API
   const fetchWebPrices = async () => {
-    let customApiKey =
-      typeof window !== 'undefined' ? localStorage.getItem('electroplan_custom_api_key') : null;
-
-    if (!customApiKey) {
-      const userKey = prompt(
-        '🔑 Clave API Key Personal Requerida:\n\n' +
-        'Cada cliente utiliza su propia clave API Key de Google Gemini para realizar búsquedas e Inteligencia Artificial.\n\n' +
-        'Podés obtener tu clave gratuita en: https://aistudio.google.com/app/apikey\n\n' +
-        'Ingresá tu API Key de Gemini a continuación (o configurala en la Pestaña 6):'
-      );
-      if (!userKey || !userKey.trim()) {
-        setStatusMsg({
-          text: 'Búsqueda cancelada. Necesitás ingresar tu propia clave API Key de Gemini para buscar precios web.',
-          type: 'error',
-        });
-        return;
-      }
-      customApiKey = userKey.trim();
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('electroplan_custom_api_key', customApiKey);
-      }
-    }
+    const customApiKey =
+      (typeof window !== 'undefined' ? localStorage.getItem('electroplan_custom_api_key') : '')?.trim() || '';
 
     setIsSearchingPrices(true);
     setStatusMsg(null);
     try {
       const reqHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
-        'x-gemini-api-key': customApiKey,
       };
+      if (customApiKey) {
+        reqHeaders['x-gemini-api-key'] = customApiKey;
+      }
 
       const result = await safeFetchJson('/api/gemini/search-prices', {
         method: 'POST',

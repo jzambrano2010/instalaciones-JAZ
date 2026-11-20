@@ -56,6 +56,8 @@ export interface TechnicalParams {
   installerName: string; // Nombre y Apellido
   installerCat: string; // Categoria (Cat I, II, III ERSeP)
   installerMatricula: string; // Matricula Profesional ERSeP
+  // Asignación manual de fases por circuito (o bloque TS 1F) para balance interactivo
+  phaseOverrides?: Record<string, 'L1' | 'L2' | 'L3'>;
 }
 
 export interface Circuit {

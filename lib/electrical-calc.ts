@@ -406,6 +406,7 @@ export function calculateSectionalBoards(
     const voltage = tsIs3P ? 380 : 220;
 
     // --- Step 1: Balance phases FIRST inside this Tablero Seccional ---
+    const overrides = params.phaseOverrides || {};
     const circuitPhases: Record<string, 'L1' | 'L2' | 'L3' | '3F'> = {};
     let wattsL1 = 0;
     let wattsL2 = 0;
@@ -418,59 +419,82 @@ export function calculateSectionalBoards(
     if (tsIs3P) {
       assignedPhase = '3F (R-S-T)';
 
-      // Local 3-bucket greedy bin packing inside this TS
-      const buckets: { watts: number; simWatts: number; circuits: Circuit[] }[] = [
-        { watts: 0, simWatts: 0, circuits: [] },
-        { watts: 0, simWatts: 0, circuits: [] },
-        { watts: 0, simWatts: 0, circuits: [] },
-      ];
-      let threePhaseW = 0;
-      let threePhaseSimW = 0;
+      const phaseAssignedW: Record<'L1' | 'L2' | 'L3', number> = { L1: 0, L2: 0, L3: 0 };
+      const phaseAssignedSimW: Record<'L1' | 'L2' | 'L3', number> = { L1: 0, L2: 0, L3: 0 };
+      const autoCircuits: Circuit[] = [];
+      let hasAnyOverrideInTs = false;
 
-      const sortedTs = [...tsCircuits].sort((a, b) => b.W - a.W);
-      sortedTs.forEach((c) => {
+      tsCircuits.forEach((c) => {
         const coeff = c.t === 'IUG' ? 0.66 : c.t === 'TUG' ? 0.7 : 1.0;
         const cSimW = c.W * coeff;
         if (c.isThreePhase || c.d.includes('380V') || c.d.includes('Trifásico')) {
-          threePhaseW += c.W / 3;
-          threePhaseSimW += cSimW / 3;
+          phaseAssignedW.L1 += c.W / 3;
+          phaseAssignedW.L2 += c.W / 3;
+          phaseAssignedW.L3 += c.W / 3;
+          phaseAssignedSimW.L1 += cSimW / 3;
+          phaseAssignedSimW.L2 += cSimW / 3;
+          phaseAssignedSimW.L3 += cSimW / 3;
           circuitPhases[c.id] = '3F';
+        } else if (overrides[c.id]) {
+          const forced = overrides[c.id];
+          hasAnyOverrideInTs = true;
+          circuitPhases[c.id] = forced;
+          phaseAssignedW[forced] += c.W;
+          phaseAssignedSimW[forced] += cSimW;
         } else {
-          let minB = 0;
-          if (buckets[1].watts < buckets[minB].watts) minB = 1;
-          if (buckets[2].watts < buckets[minB].watts) minB = 2;
-          buckets[minB].watts += c.W;
-          buckets[minB].simWatts += cSimW;
-          buckets[minB].circuits.push(c);
+          autoCircuits.push(c);
         }
       });
 
-      // Step 2: Rotate local buckets -> (L1, L2, L3) so heaviest local bucket lands on lightest TCE phase
-      const bucketsDesc = [...buckets].sort((a, b) => b.watts - a.watts);
-      const phasesList: ('L1' | 'L2' | 'L3')[] = ['L1', 'L2', 'L3'];
-      const tcePhasesAsc = phasesList.sort(
-        (pA, pB) => tcePhaseWatts[pA] - tcePhaseWatts[pB]
-      );
+      if (autoCircuits.length > 0) {
+        if (hasAnyOverrideInTs) {
+          // Place any new/un-overridden circuits on the lightest local phase without disturbing manual overrides
+          const sortedAuto = [...autoCircuits].sort((a, b) => b.W - a.W);
+          sortedAuto.forEach((c) => {
+            const coeff = c.t === 'IUG' ? 0.66 : c.t === 'TUG' ? 0.7 : 1.0;
+            const cSimW = c.W * coeff;
+            let target: 'L1' | 'L2' | 'L3' = 'L1';
+            if (phaseAssignedW.L2 < phaseAssignedW[target]) target = 'L2';
+            if (phaseAssignedW.L3 < phaseAssignedW[target]) target = 'L3';
+            circuitPhases[c.id] = target;
+            phaseAssignedW[target] += c.W;
+            phaseAssignedSimW[target] += cSimW;
+          });
+        } else {
+          // Full automatic local 3-bucket greedy bin packing inside this TS + rotation against TCE
+          const buckets: { watts: number; simWatts: number; circuits: Circuit[] }[] = [
+            { watts: 0, simWatts: 0, circuits: [] },
+            { watts: 0, simWatts: 0, circuits: [] },
+            { watts: 0, simWatts: 0, circuits: [] },
+          ];
+          const sortedTs = [...autoCircuits].sort((a, b) => b.W - a.W);
+          sortedTs.forEach((c) => {
+            const coeff = c.t === 'IUG' ? 0.66 : c.t === 'TUG' ? 0.7 : 1.0;
+            const cSimW = c.W * coeff;
+            let minB = 0;
+            if (buckets[1].watts < buckets[minB].watts) minB = 1;
+            if (buckets[2].watts < buckets[minB].watts) minB = 2;
+            buckets[minB].watts += c.W;
+            buckets[minB].simWatts += cSimW;
+            buckets[minB].circuits.push(c);
+          });
 
-      const phaseAssignedW: Record<'L1' | 'L2' | 'L3', number> = {
-        L1: threePhaseW,
-        L2: threePhaseW,
-        L3: threePhaseW,
-      };
-      const phaseAssignedSimW: Record<'L1' | 'L2' | 'L3', number> = {
-        L1: threePhaseSimW,
-        L2: threePhaseSimW,
-        L3: threePhaseSimW,
-      };
+          const bucketsDesc = [...buckets].sort((a, b) => b.watts - a.watts);
+          const phasesList: ('L1' | 'L2' | 'L3')[] = ['L1', 'L2', 'L3'];
+          const tcePhasesAsc = phasesList.sort(
+            (pA, pB) => tcePhaseWatts[pA] - tcePhaseWatts[pB]
+          );
 
-      bucketsDesc.forEach((b, i) => {
-        const targetPhase = tcePhasesAsc[i];
-        phaseAssignedW[targetPhase] += b.watts;
-        phaseAssignedSimW[targetPhase] += b.simWatts;
-        b.circuits.forEach((c) => {
-          circuitPhases[c.id] = targetPhase;
-        });
-      });
+          bucketsDesc.forEach((b, i) => {
+            const targetPhase = tcePhasesAsc[i];
+            phaseAssignedW[targetPhase] += b.watts;
+            phaseAssignedSimW[targetPhase] += b.simWatts;
+            b.circuits.forEach((c) => {
+              circuitPhases[c.id] = targetPhase;
+            });
+          });
+        }
+      }
 
       wattsL1 = Math.round(phaseAssignedW.L1);
       wattsL2 = Math.round(phaseAssignedW.L2);
@@ -483,10 +507,15 @@ export function calculateSectionalBoards(
       tcePhaseWatts.L2 += wattsL2;
       tcePhaseWatts.L3 += wattsL3;
     } else {
-      // 1-Phase TS: pick lightest phase on TCE (or L1 if TCE itself is 1F)
+      // 1-Phase TS: honor manual phase override (block or circuit) when TCE is 3F, otherwise pick lightest phase
       let targetPhase: 'L1' | 'L2' | 'L3' = 'L1';
       if (mainIs3P) {
-        if (tcePhaseWatts.L2 < tcePhaseWatts.L1 && tcePhaseWatts.L2 <= tcePhaseWatts.L3) {
+        const boardOverride =
+          overrides[`__TS__${boardCode}`] ||
+          tsCircuits.map((c) => overrides[c.id]).find((p) => Boolean(p));
+        if (boardOverride) {
+          targetPhase = boardOverride;
+        } else if (tcePhaseWatts.L2 < tcePhaseWatts.L1 && tcePhaseWatts.L2 <= tcePhaseWatts.L3) {
           targetPhase = 'L2';
         } else if (tcePhaseWatts.L3 < tcePhaseWatts.L1 && tcePhaseWatts.L3 < tcePhaseWatts.L2) {
           targetPhase = 'L3';
@@ -675,7 +704,8 @@ export interface PhaseBalanceResult {
 export function calculatePhaseBalance(
   circuits: Circuit[],
   sectionalBoards?: SectionalBoardAnalysis[],
-  isThreePhaseSupply?: boolean
+  isThreePhaseSupply?: boolean,
+  phaseOverrides?: Record<string, 'L1' | 'L2' | 'L3'>
 ): PhaseBalanceResult {
   const l1Circuits: Circuit[] = [];
   const l2Circuits: Circuit[] = [];
@@ -691,6 +721,56 @@ export function calculatePhaseBalance(
         )
       : true);
 
+  const assignSinglePhase = (c: Circuit, phase: 'L1' | 'L2' | 'L3') => {
+    circuitPhases[c.id] = phase;
+    if (phase === 'L1') {
+      w1 += c.W;
+      l1Circuits.push(c);
+    } else if (phase === 'L2') {
+      w2 += c.W;
+      l2Circuits.push(c);
+    } else {
+      w3 += c.W;
+      l3Circuits.push(c);
+    }
+  };
+
+  const assignThreePhase = (c: Circuit) => {
+    const thirdW = c.W / 3;
+    w1 += thirdW;
+    w2 += thirdW;
+    w3 += thirdW;
+    l1Circuits.push(c);
+    l2Circuits.push(c);
+    l3Circuits.push(c);
+    circuitPhases[c.id] = '3F';
+  };
+
+  const placeListWithOverrides = (list: Circuit[]) => {
+    const autoList: Circuit[] = [];
+    list.forEach((c) => {
+      if (c.isThreePhase || c.d.includes('Trifásico') || c.d.includes('380V') || c.d.includes('380 V')) {
+        assignThreePhase(c);
+      } else if (supplyIs3P && phaseOverrides?.[c.id]) {
+        assignSinglePhase(c, phaseOverrides[c.id]);
+      } else {
+        autoList.push(c);
+      }
+    });
+
+    autoList
+      .sort((a, b) => b.W - a.W)
+      .forEach((c) => {
+        if (!supplyIs3P || (w1 <= w2 && w1 <= w3)) {
+          assignSinglePhase(c, 'L1');
+        } else if (w2 <= w1 && w2 <= w3) {
+          assignSinglePhase(c, 'L2');
+        } else {
+          assignSinglePhase(c, 'L3');
+        }
+      });
+  };
+
   if (sectionalBoards && sectionalBoards.length > 0) {
     // Hierarchical consolidation: respect the internal phase assignment of each TS first
     const assignedCircuitIds = new Set<string>();
@@ -698,84 +778,20 @@ export function calculatePhaseBalance(
       sb.circuits.forEach((c) => {
         assignedCircuitIds.add(c.id);
         const phase = sb.internalPhaseBalance.circuitPhases[c.id] || 'L1';
-        circuitPhases[c.id] = phase;
         if (phase === '3F') {
-          const thirdW = c.W / 3;
-          w1 += thirdW;
-          w2 += thirdW;
-          w3 += thirdW;
-          l1Circuits.push(c);
-          l2Circuits.push(c);
-          l3Circuits.push(c);
-        } else if (phase === 'L1') {
-          w1 += c.W;
-          l1Circuits.push(c);
-        } else if (phase === 'L2') {
-          w2 += c.W;
-          l2Circuits.push(c);
+          assignThreePhase(c);
         } else {
-          w3 += c.W;
-          l3Circuits.push(c);
+          assignSinglePhase(c, phase);
         }
       });
     });
 
-    // Any remaining direct TCE circuits balance onto the lightest global TCE phases
-    const remaining = circuits
-      .filter((c) => !assignedCircuitIds.has(c.id))
-      .sort((a, b) => b.W - a.W);
-
-    remaining.forEach((c) => {
-      if (c.isThreePhase || c.d.includes('Trifásico') || c.d.includes('380V') || c.d.includes('380 V')) {
-        const thirdW = c.W / 3;
-        w1 += thirdW;
-        w2 += thirdW;
-        w3 += thirdW;
-        l1Circuits.push(c);
-        l2Circuits.push(c);
-        l3Circuits.push(c);
-        circuitPhases[c.id] = '3F';
-      } else if (!supplyIs3P || (w1 <= w2 && w1 <= w3)) {
-        w1 += c.W;
-        l1Circuits.push(c);
-        circuitPhases[c.id] = 'L1';
-      } else if (w2 <= w1 && w2 <= w3) {
-        w2 += c.W;
-        l2Circuits.push(c);
-        circuitPhases[c.id] = 'L2';
-      } else {
-        w3 += c.W;
-        l3Circuits.push(c);
-        circuitPhases[c.id] = 'L3';
-      }
-    });
+    // Any remaining direct TCE circuits respect phaseOverrides first, then balance onto lightest phase
+    const remaining = circuits.filter((c) => !assignedCircuitIds.has(c.id));
+    placeListWithOverrides(remaining);
   } else {
-    // Fallback standalone greedy bin-packing
-    const sorted = [...circuits].sort((a, b) => b.W - a.W);
-    sorted.forEach((c) => {
-      if (c.isThreePhase || c.d.includes('Trifásico') || c.d.includes('380V') || c.d.includes('380 V')) {
-        const thirdW = c.W / 3;
-        w1 += thirdW;
-        w2 += thirdW;
-        w3 += thirdW;
-        l1Circuits.push(c);
-        l2Circuits.push(c);
-        l3Circuits.push(c);
-        circuitPhases[c.id] = '3F';
-      } else if (!supplyIs3P || (w1 <= w2 && w1 <= w3)) {
-        w1 += c.W;
-        l1Circuits.push(c);
-        circuitPhases[c.id] = 'L1';
-      } else if (w2 <= w1 && w2 <= w3) {
-        w2 += c.W;
-        l2Circuits.push(c);
-        circuitPhases[c.id] = 'L2';
-      } else {
-        w3 += c.W;
-        l3Circuits.push(c);
-        circuitPhases[c.id] = 'L3';
-      }
-    });
+    // Standalone / 3F simulation mode: honor phaseOverrides first, then greedy bin-pack remaining
+    placeListWithOverrides(circuits);
   }
 
   const roundW1 = Math.round(w1);

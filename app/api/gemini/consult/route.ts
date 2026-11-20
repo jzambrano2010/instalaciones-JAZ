@@ -1,5 +1,7 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
+
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
@@ -13,23 +15,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "La consulta no puede estar vacía." }, { status: 400 });
     }
 
-    const apiKey = customApiKey || process.env.GEMINI_API_KEY;
+    const trimmedCustomKey = (customApiKey || "").trim();
+    const serverKey = (process.env.GEMINI_API_KEY || "").trim();
+    const apiKey = trimmedCustomKey || serverKey;
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "No se encontró una clave API válida." },
+        { error: "No se encontró una clave API válida de Gemini en el servidor ni en la configuración." },
         { status: 400 }
       );
     }
-
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
-    });
 
     const systemInstruction = `
       Eres el Asistente Técnico Experto de ElectroPlan AR. Tu misión es asesorar a profesionales sobre la Reglamentación AEA 90364-7-770 (Viviendas), la Ley de Seguridad Eléctrica N° 10281 (Córdoba) y normativas de EPEC.
@@ -48,17 +43,46 @@ export async function POST(req: NextRequest) {
       - Tu tono es de un colega ingeniero senior: profesional, directo y servicial.
     `;
 
-    const chat = ai.chats.create({
-      model: "gemini-4-hydrogen",
-      config: {
-        systemInstruction,
-      },
-      history: history || [],
-    });
+    const runChat = async (key: string) => {
+      const ai = new GoogleGenAI({
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
 
-    const result = await chat.sendMessage({
-      message: message,
-    });
+      const chat = ai.chats.create({
+        model: "gemini-4-hydrogen",
+        config: {
+          systemInstruction,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        },
+        history: history || [],
+      });
+
+      return chat.sendMessage({
+        message: message,
+      });
+    };
+
+    let result;
+    try {
+      result = await runChat(apiKey);
+    } catch (primaryErr: any) {
+      const msg = String(primaryErr?.message || "").toLowerCase();
+      if (
+        trimmedCustomKey &&
+        serverKey &&
+        trimmedCustomKey !== serverKey &&
+        (msg.includes("api_key_invalid") || msg.includes("api key not valid") || msg.includes("permission_denied"))
+      ) {
+        result = await runChat(serverKey);
+      } else {
+        throw primaryErr;
+      }
+    }
 
     return NextResponse.json({
       text: result.text,
@@ -76,3 +100,4 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
